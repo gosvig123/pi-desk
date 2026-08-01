@@ -47,7 +47,7 @@ Pi accumulates sessions across many working directories: your home, several proj
 - You re-open the wrong session and pollute it with unrelated context
 - You waste time searching by timestamp guessing
 
-pisesh is a **single-file Node script** (no dependencies, ~900 LoC) that gives you everything `pi --resume` doesn't.
+pisesh is a **single-file Node script** (no dependencies, ~1,100 LoC) that gives you everything `pi --resume` doesn't.
 
 ### Value at a glance
 
@@ -63,7 +63,7 @@ pisesh is a **single-file Node script** (no dependencies, ~900 LoC) that gives y
 | Read Korean / Chinese / Japanese prompts   | Display-width-aware truncation; columns never blow up on CJK                 |
 | Open from anywhere                         | Run as standalone `pisesh` shell command, or `/sesh` inside pi               |
 | Zero install pain                          | No build step, no native deps, runs on Node 18+ everywhere                   |
-| Trust it with your history                 | pisesh writes only two small JSON files (favorites + overrides); session jsonl files are read-only |
+| Trust it with your history                 | favorites and overrides stay in sidecar JSON; session history changes only for orphan-call repair |
 
 ## Getting started
 
@@ -102,7 +102,9 @@ For local pi testing, run `pi install .` from the cloned repository so the exten
 | `↑` `↓` / `j` `k`            | move cursor                                                  |
 | `Tab` / `h` / `l`            | switch tab (`★ Favorites` → `Today` → `Here` → `All`)         |
 | `f` / `Space`                | star / unstar the selected session                           |
-| `Enter`                      | resume the session; runs `pi --session <id>` in its (or the overridden) cwd |
+| `x`                          | remove favorites whose session files no longer exist         |
+| `Enter`                      | resume using the current default model and thinking settings  |
+| `o`                          | resume using the model and thinking recorded in the session   |
 | `e`                          | edit name: set a custom display title, shown with `✎` in the list |
 | `p`                          | edit cwd with an arrow-key directory browser; sets the resume / `Here` dir |
 | `d`                          | session details (full prompt, file, byte size, timestamps)   |
@@ -122,6 +124,8 @@ pisesh --list                  # print starred session IDs (one per line)
 pisesh --json                  # full favorites file as JSON
 pisesh --star <partial-uuid>   # star a session from a script
 pisesh --unstar <partial-uuid> # unstar
+pisesh --clean-favorites       # remove favorites whose sessions are gone
+pisesh --version               # print installed version
 pisesh --help
 ```
 
@@ -140,6 +144,8 @@ pisesh --help
 | Storage             | Two JSON files: `~/.pi/agent/favorites.json` (starred ids) + `~/.pi/agent/pisesh-meta.json` (per-session title / cwd overrides) |
 | Session discovery   | Direct filesystem scan of `~/.pi/agent/sessions/<projectSlug>/*.jsonl`; first 96 KB parsed       |
 | Process model       | Slash command pauses pi's TUI, spawns pisesh with inherited stdio, restarts pi on exit           |
+| Resume settings     | `Enter` uses current defaults; `o` preserves the model and thinking recorded in the session         |
+| Custom paths        | Honors `PI_AGENT_DIR` and `PI_SESSION_DIR`, including a flat custom session directory                |
 
 ### What it explicitly does **not** depend on
 
@@ -152,9 +158,9 @@ pisesh --help
 
 | What       | Where                                                       |
 | ---------- | ----------------------------------------------------------- |
-| Favorites  | `~/.pi/agent/favorites.json`                                |
-| Overrides  | `~/.pi/agent/pisesh-meta.json` (per-session custom title / cwd, keyed by session id) |
-| Sessions   | `~/.pi/agent/sessions/<projectSlug>/<timestamp>_<uuid>.jsonl` (pi's native layout; pisesh never writes here) |
+| Favorites  | `$PI_AGENT_DIR/favorites.json` (defaults to `~/.pi/agent/favorites.json`) |
+| Overrides  | `$PI_AGENT_DIR/pisesh-meta.json` (per-session custom title / cwd, keyed by session id) |
+| Sessions   | `$PI_SESSION_DIR`, or `$PI_AGENT_DIR/sessions` by default (repaired only when an orphaned tool call would break resume) |
 
 Favorites file shape:
 

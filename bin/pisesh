@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // pisesh — pi session bookmark & resume TUI
 // Tabs: ★ Favorites / Today / Here / All
-// Storage: ~/.pi/agent/favorites.json   (starred session ids)
-//          ~/.pi/agent/pisesh-meta.json (per-session title / cwd overrides)
-// Sessions: ~/.pi/agent/sessions/<projectSlug>/<ts>_<uuid>.jsonl
+// Storage: $PI_AGENT_DIR/favorites.json   (starred session ids)
+//          $PI_AGENT_DIR/pisesh-meta.json (per-session title / cwd overrides)
+// Sessions: $PI_SESSION_DIR or $PI_AGENT_DIR/sessions
 
 'use strict';
 
@@ -15,9 +15,20 @@ const readline = require('readline');
 
 // ── Paths ─────────────────────────────────────────────
 const HOME = os.homedir();
-const SESSIONS_ROOT = path.join(HOME, '.pi/agent/sessions');
-const FAV_FILE = path.join(HOME, '.pi/agent/favorites.json');
-const META_FILE = path.join(HOME, '.pi/agent/pisesh-meta.json');
+const AGENT_DIR = path.resolve(process.env.PI_AGENT_DIR || path.join(HOME, '.pi/agent'));
+const SESSIONS_ROOT = path.resolve(process.env.PI_SESSION_DIR || path.join(AGENT_DIR, 'sessions'));
+const FAV_FILE = path.join(AGENT_DIR, 'favorites.json');
+const META_FILE = path.join(AGENT_DIR, 'pisesh-meta.json');
+const SETTINGS_FILE = path.join(AGENT_DIR, 'settings.json');
+const VERSION = (() => {
+  for (const file of [
+    path.resolve(__dirname, '../package.json'),
+    path.join(AGENT_DIR, 'npm/node_modules/pisesh/package.json'),
+  ]) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')).version; } catch {}
+  }
+  return 'unknown';
+})();
 
 // Current session id (set by the /sesh extension before spawning). Lets us
 // flag the currently-attached session in the list with a [NOW] badge.
@@ -177,16 +188,29 @@ function readSessionMeta(file) {
 }
 
 function scanSessions() {
-  let projectDirs;
-  try {
-    projectDirs = fs.readdirSync(SESSIONS_ROOT, { withFileTypes: true })
-      .filter(d => d.isDirectory());
-  } catch { return []; }
+  let rootEntries;
+  try { rootEntries = fs.readdirSync(SESSIONS_ROOT, { withFileTypes: true }); }
+  catch { return []; }
+
+  const projectDirs = rootEntries
+    .filter(entry => entry.isDirectory())
+    .map(entry => ({
+      name: entry.name,
+      path: path.join(SESSIONS_ROOT, entry.name),
+      label: decodeProjectSlug(entry.name),
+    }));
+  if (rootEntries.some(entry => entry.isFile() && entry.name.endsWith('.jsonl'))) {
+    projectDirs.unshift({
+      name: path.basename(SESSIONS_ROOT),
+      path: SESSIONS_ROOT,
+      label: CURRENT_CWD || SESSIONS_ROOT,
+    });
+  }
 
   const results = [];
   for (const d of projectDirs) {
-    const projectPath = path.join(SESSIONS_ROOT, d.name);
-    const projectLabel = decodeProjectSlug(d.name);
+    const projectPath = d.path;
+    const projectLabel = d.label;
     let files;
     try { files = fs.readdirSync(projectPath).filter(f => f.endsWith('.jsonl')); }
     catch { continue; }
@@ -225,12 +249,23 @@ function scanSessions() {
   return results;
 }
 
+function cleanStaleFavorites(knownSessions = sessions) {
+  const knownIds = new Set(knownSessions.map(session => session.id));
+  const stale = [...favorites].filter(id => !knownIds.has(id));
+  if (stale.length > 0) {
+    for (const id of stale) favorites.delete(id);
+    saveFavorites(favorites);
+  }
+  return stale;
+}
+
 // ── State ─────────────────────────────────────────────
 let sessions = [];
 let tabs = ['★ Favorites', 'Today', 'Here', 'All'];
 let tabIdx = 0;
 let cursor = 0;
 let filter = '';
+let notice = '';
 let mode = 'list';      // list | filter | details | edit | browse
 // edit mode state (title text editor)
 let editField = '';     // 'title' | 'cwd'
@@ -450,12 +485,15 @@ function renderList() {
   out += ' ' + A.D + '↑↓' + A.R + ' move  '
       + A.D + 'Tab' + A.R + ' tab  '
       + A.D + 'f' + A.R + ' star  '
-      + A.D + 'Enter' + A.R + ' resume  '
+      + A.D + 'x' + A.R + ' clean  '
+      + A.D + 'Enter' + A.R + ' current  '
+      + A.D + 'o' + A.R + ' original  '
       + A.D + 'e' + A.R + ' edit name  '
       + A.D + 'p' + A.R + ' edit cwd  '
       + A.D + 'd' + A.R + ' details  '
       + A.D + '/' + A.R + ' search  '
       + A.D + 'q' + A.R + ' quit' + A.R + '\n';
+  if (notice) out += ' ' + A.cyn + notice + A.R + '\n';
 
   process.stdout.write(out);
 }
@@ -524,6 +562,11 @@ function renderDetails() {
   out += row('cwd', s.effectiveCwd + (s.cwdOverride ? A.cyn + '  (custom)' + A.R : ''), A.mag);
   if (s.cwdOverride) out += row('recorded', s.cwd, A.gry);
   out += row('project', s.project);
+  const defaults = loadResumeDefaults();
+  out += row('Enter uses', defaults
+    ? `${defaults.model || 'session model'} / thinking ${defaults.thinking || 'session value'}`
+    : 'session model and thinking', A.grn);
+  out += row('o uses', 'session-recorded model and thinking', A.gry);
   out += row('size', fmtSize(s.size));
   out += row('file', s.file, A.gry);
   out += '\n ' + A.D + 'first prompt:' + A.R + '\n';
@@ -532,7 +575,8 @@ function renderDetails() {
   for (const line of wrapped) out += '   ' + line + '\n';
 
   out += '\n' + A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
-  out += ' ' + A.D + 'Enter' + A.R + ' resume  '
+  out += ' ' + A.D + 'Enter' + A.R + ' current defaults  '
+      + A.D + 'o' + A.R + ' original settings  '
       + A.D + 'f' + A.R + ' star  '
       + A.D + 'e' + A.R + ' edit name  '
       + A.D + 'p' + A.R + ' edit cwd  '
@@ -618,7 +662,12 @@ function handleList(str, key) {
       saveFavorites(favorites);
     }
   }
-  else if (k === 'return') resumeSession(list[cursor]);
+  else if (k === 'return') resumeSession(list[cursor], true);
+  else if (k === 'o') resumeSession(list[cursor], false);
+  else if (k === 'x') {
+    const removed = cleanStaleFavorites(sessions).length;
+    notice = removed ? `removed ${removed} stale favorite${removed === 1 ? '' : 's'}` : 'no stale favorites';
+  }
   else if (k === 'd') { if (list[cursor]) mode = 'details'; }
   else if (k === 'e') startEdit(list[cursor], 'title');
   else if (k === 'p') startBrowse(list[cursor]);
@@ -644,7 +693,8 @@ function handleDetails(str, key) {
   const s = visibleSessions()[cursor];
   if (k === 'escape' || k === 'q' || k === 'd') { mode = 'list'; return; }
   if (key.ctrl && k === 'c') return quit();
-  if (k === 'return') return resumeSession(s);
+  if (k === 'return') return resumeSession(s, true);
+  if (k === 'o') return resumeSession(s, false);
   if (k === 'f' && s) {
     if (s.favored) favorites.delete(s.id); else favorites.add(s.id);
     saveFavorites(favorites);
@@ -845,7 +895,7 @@ function tryCopy(text) {
 // as "pisesh exited with code N". We inject a synthetic "[interrupted]"
 // toolResult for unfinished valid turns, but not errored/aborted assistant turns
 // that pi omits during replay. Old incompatible synthetic results are removed.
-// Idempotent; never throws.
+// Idempotent. Throws when the session cannot be read, backed up, or written.
 function healOrphanedToolCalls(file) {
   try {
     const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
@@ -912,29 +962,61 @@ function healOrphanedToolCalls(file) {
     }
     const changed = removedParents.size + inserted;
     if (changed > 0) {
-      try { const bak = file + '.bak-orphanheal'; if (!fs.existsSync(bak)) fs.copyFileSync(file, bak); } catch {}
+      const bak = file + '.bak-orphanheal';
+      if (!fs.existsSync(bak)) fs.copyFileSync(file, bak);
       fs.writeFileSync(file, out.join('\n') + '\n');
     }
     return changed;
-  } catch { return 0; }
+  } catch (error) {
+    throw new Error(`session repair failed: ${error.message}`);
+  }
 }
 
-function resumeSession(s) {
+function loadResumeDefaults(settingsFile = SETTINGS_FILE) {
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    return {
+      model: settings.defaultProvider && settings.defaultModel
+        ? `${settings.defaultProvider}/${settings.defaultModel}`
+        : '',
+      thinking: settings.defaultThinkingLevel || '',
+    };
+  } catch { return null; }
+}
+
+function buildResumeArgs(s, useCurrentDefaults = true, settingsFile = SETTINGS_FILE) {
+  const args = ['--session', s.id, '--session-dir', path.dirname(s.file)];
+  const defaults = useCurrentDefaults && loadResumeDefaults(settingsFile);
+  if (defaults?.model) args.push('--model', defaults.model);
+  if (defaults?.thinking) args.push('--thinking', defaults.thinking);
+  return args;
+}
+
+function resumeSession(s, useCurrentDefaults = true) {
   if (!s) return;
   // Heal orphaned tool calls before handing off, so resume can't crash the
   // spawned pi (see healOrphanedToolCalls).
-  try { healOrphanedToolCalls(s.file); } catch {}
+  let repaired;
+  try { repaired = healOrphanedToolCalls(s.file); }
+  catch (error) {
+    process.stdout.write(A.exitAlt + A.showC);
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    console.error(`pisesh: ${error.message}`);
+    process.exit(1);
+  }
   // Leave alt screen + show cursor so the spawned pi takes over a clean
   // main-buffer terminal (it will manage its own alt screen).
   process.stdout.write(A.exitAlt + A.showC);
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.stdin.pause();
+  if (repaired > 0) {
+    console.log(`pisesh: repaired ${repaired} orphaned session entr${repaired === 1 ? 'y' : 'ies'}; backup: ${s.file}.bak-orphanheal`);
+  }
 
-  const projectDir = path.dirname(s.file);
   // Resume in the session's effective cwd (user override wins over recorded),
   // falling back to pisesh's own cwd if that directory no longer exists.
   const targetCwd = s.effectiveCwd;
-  const child = spawn('pi', ['--session', s.id, '--session-dir', projectDir], {
+  const child = spawn('pi', buildResumeArgs(s, useCurrentDefaults), {
     stdio: 'inherit',
     cwd: targetCwd && fs.existsSync(targetCwd) ? targetCwd : process.cwd(),
   });
@@ -964,13 +1046,17 @@ Usage:
   pisesh --json          Dump favorites file as JSON
   pisesh --star <id>     Add a session id (partial UUID ok) to favorites
   pisesh --unstar <id>   Remove a session id from favorites
+  pisesh --clean-favorites  Remove favorites whose sessions no longer exist
+  pisesh --version, -v   Print the installed version
   pisesh --help, -h      This help
 
 TUI keys:
   ↑↓ / j k         move cursor
   Tab / h l        switch tab  (★ Favorites → Today → Here → All)
   f / Space        toggle favorite
-  Enter            resume session (spawns 'pi --session …' in its cwd)
+  x                remove favorites whose sessions no longer exist
+  Enter            resume with current default model and thinking settings
+  o                resume with the session-recorded model and thinking settings
   e                edit name (custom display title)
   p                edit cwd — arrow-key directory browser
                    (↑↓ move, →/Enter open dir, ← parent, s select, Esc cancel)
@@ -1000,6 +1086,13 @@ function main() {
   const argv = process.argv.slice(2);
 
   if (argv.includes('-h') || argv.includes('--help')) { printHelp(); return; }
+  if (argv.includes('-v') || argv.includes('--version')) { console.log(VERSION); return; }
+  if (argv.includes('--clean-favorites')) {
+    sessions = scanSessions();
+    const stale = cleanStaleFavorites(sessions);
+    console.log(`removed ${stale.length} stale favorite${stale.length === 1 ? '' : 's'}`);
+    return;
+  }
   if (argv.includes('-l') || argv.includes('--list')) {
     [...favorites].forEach(id => console.log(id));
     return;
@@ -1041,4 +1134,4 @@ function main() {
 }
 
 if (require.main === module) main();
-else module.exports = { healOrphanedToolCalls };
+else module.exports = { buildResumeArgs, cleanStaleFavorites, healOrphanedToolCalls, loadResumeDefaults };
