@@ -47,14 +47,14 @@ Pi accumulates sessions across many working directories: your home, several proj
 - You re-open the wrong session and pollute it with unrelated context
 - You waste time searching by timestamp guessing
 
-pisesh is a **single-file Node script** (no dependencies, ~1,100 LoC) that gives you everything `pi --resume` doesn't.
+pisesh is a **single-file Node script** (no dependencies, ~1,600 LoC) that gives you everything `pi --resume` doesn't.
 
 ### Value at a glance
 
 | Need                                       | What you get                                                                 |
 | ------------------------------------------ | ---------------------------------------------------------------------------- |
 | Mark important sessions                    | ⭐ Star/unstar with one keystroke; favorites persist to one global JSON       |
-| Give a thread a real name                  | `e` sets a custom title (marked `✎`); overrides the first-prompt label        |
+| Give a thread a real name                  | `e` sets one manually; `g` generates one with a model you choose             |
 | See only the current project's sessions    | `Here` tab filters to sessions whose cwd matches where you launched pisesh   |
 | Fix where a session resumes                | `p` opens an arrow-key directory browser; sets the cwd pi `cd`s into         |
 | Find a session by what you said            | `/` searches id + project + first user prompt + custom title                 |
@@ -106,14 +106,18 @@ For local pi testing, run `pi install .` from the cloned repository so the exten
 | `Enter`                      | resume using the current default model and thinking settings  |
 | `o`                          | resume using the model and thinking recorded in the session   |
 | `e`                          | edit name: set a custom display title, shown with `✎` in the list |
+| `g`                          | queue title generation with the saved model and effort; clear a manual title with `e` first |
+| `G`                          | open title-generation settings to choose the saved model + effort |
 | `p`                          | edit cwd with an arrow-key directory browser; sets the resume / `Here` dir |
 | `d`                          | session details (full prompt, file, byte size, timestamps)   |
 | `/`                          | search by id / project / first user prompt / custom title    |
-| `Esc`                        | clear search first, then quit                                |
-| `q` / `Ctrl-C`               | quit (terminal restored)                                     |
+| `Esc` / `q`                  | cancel generation or clear search first; press again to quit |
+| `Ctrl-C`                     | cancel generation and quit immediately                       |
 | `r`                          | rescan session files (after pi starts a new session)         |
 | `c` (in details view)        | copy session id to clipboard (clip.exe / pbcopy / xclip)     |
 | `Home` `End` `PgUp` `PgDn`   | jump to top / bottom / ±10                                   |
+
+Title generation sends up to 16 KB of session text to the selected model provider and may incur provider charges. It excludes tool results and disables context files, skills, prompt templates, and tools.
 
 ## CLI (non-TUI) usage
 
@@ -141,17 +145,18 @@ pisesh --help
 | Input               | Node's `readline.emitKeypressEvents` in raw mode                                                 |
 | Width calculation   | UAX #11 East Asian Width ranges, compressed to ~10 inline range checks                           |
 | Pi extension        | TypeScript factory using `@earendil-works/pi-coding-agent` extension API (`ui.custom`, `tui.stop`) |
-| Storage             | Two JSON files: `~/.pi/agent/favorites.json` (starred ids) + `~/.pi/agent/pisesh-meta.json` (per-session title / cwd overrides) |
+| Storage             | Two JSON files under `$PI_AGENT_DIR`: `favorites.json` and `pisesh-meta.json`                 |
 | Session discovery   | Direct filesystem scan of `~/.pi/agent/sessions/<projectSlug>/*.jsonl`; first 96 KB parsed       |
 | Process model       | Slash command pauses pi's TUI, spawns pisesh with inherited stdio, restarts pi on exit           |
 | Resume settings     | `Enter` uses current defaults; `o` preserves the model and thinking recorded in the session         |
 | Custom paths        | Honors `PI_AGENT_DIR` and `PI_SESSION_DIR`, including a flat custom session directory                |
+| Title generation    | Ephemeral `pi --print --no-session` call using the model and effort selected in pisesh            |
 
 ### What it explicitly does **not** depend on
 
 - No `npm install` for the bundled CLI runtime; it's genuinely zero-dependency
 - No native binaries / GPU / ffmpeg / database
-- No network calls, no telemetry, no analytics
+- No telemetry or analytics; title generation contacts only the provider for the model you select
 - No daemon / background process
 
 ## Storage
@@ -159,7 +164,7 @@ pisesh --help
 | What       | Where                                                       |
 | ---------- | ----------------------------------------------------------- |
 | Favorites  | `$PI_AGENT_DIR/favorites.json` (defaults to `~/.pi/agent/favorites.json`) |
-| Overrides  | `$PI_AGENT_DIR/pisesh-meta.json` (per-session custom title / cwd, keyed by session id) |
+| Overrides  | `$PI_AGENT_DIR/pisesh-meta.json` (per-session title / cwd plus the saved title model + effort preset) |
 | Sessions   | `$PI_SESSION_DIR`, or `$PI_AGENT_DIR/sessions` by default (repaired only when an orphaned tool call would break resume) |
 
 Favorites file shape:

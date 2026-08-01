@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-08-01
+
+### Added
+- Add background LLM title generation: `g` queues a session using the saved model and effort, while `G` opens generation settings. Up to three titles generate concurrently. Based on #2 by @ahoereth.
+
+### Fixed
+- Keep extension-backed model providers available while disabling context files, skills, prompt templates, and tools for title generation.
+- Preserve manual titles during queued generation, reject malformed or control-sequence output, and report generation failures visibly.
+- Forward custom agent directories to spawned pi processes and terminate cancelled generation processes safely.
+
 ## [0.1.13] - 2026-08-01
 
 ### Added
