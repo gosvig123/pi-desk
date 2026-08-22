@@ -1,6 +1,6 @@
 {
   "name": "pisesh",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Bookmark, search, and resume pi coding-agent sessions with a fast keyboard-driven TUI.",
   "keywords": [
     "pi-package",
@@ -27,7 +27,7 @@
   "author": "Blue-B <source_vs@naver.com>",
   "type": "commonjs",
   "bin": {
-    "pisesh": "./bin/pisesh"
+    "pisesh": "bin/pisesh"
   },
   "files": [
     "bin/",

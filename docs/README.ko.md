@@ -63,7 +63,7 @@ pisesh는 **단일 파일 Node 스크립트** (의존성 0, ~900 LoC) 입니다.
 | 한·중·일 prompt 읽기                         | 표시 너비 기반 truncation; CJK 들어가도 컬럼 안 흐트러짐           |
 | 어디서든 열기                                | 셸 명령어 `pisesh` 또는 pi 안의 `/sesh` 슬래시 명령                 |
 | 설치 고통 없음                               | 빌드 단계 없음, native deps 없음, Node 18+ 면 어디서든            |
-| 히스토리 안전성                              | pisesh는 작은 JSON 두 개(favorites + overrides)만 씀. 세션 jsonl은 읽기 전용 |
+| 히스토리 안전성                              | 설정은 sidecar JSON에 저장. 끊긴 tool call 복구가 필요할 때만 백업 후 세션을 고침 |
 
 ## 설치
 
@@ -74,6 +74,8 @@ pi install npm:pisesh
 ```
 
 pi 익스텐션으로 등록됩니다. pi 안에서 `/sesh`를 입력하면 번들된 CLI가 실행되므로 글로벌 npm 설치는 필요하지 않습니다.
+
+`/sesh`는 두 번째 pi 프로세스를 띄우지 않습니다. pisesh가 선택한 세션과 옵션을 익스텐션에 반환하면, 익스텐션이 pi 공식 API인 `ctx.switchSession()`으로 현재 런타임을 전환합니다. 독립 실행 `pisesh`는 기존처럼 `pi --session`을 실행합니다. 커스텀 cwd override는 익스텐션 세션 전환에서 `cwdOverride`를 지원하는 pi 버전이 필요하며, pi가 이를 무시하면 pisesh가 경고합니다.
 
 ### 독립 셸 CLI 설치
 
@@ -102,7 +104,8 @@ pisesh --help
 | `↑` `↓` / `j` `k`           | 커서 이동                                                     |
 | `Tab` / `h` / `l`           | 탭 전환 (`★ Favorites` → `Today` → `Here` → `All`)             |
 | `f` / `Space`               | 선택 세션 별표/해제                                           |
-| `Enter`                     | 세션 재개. 세션의(또는 오버라이드한) cwd에서 `pi --session <id>` 실행 |
+| `Enter`                     | 현재 기본 모델과 thinking 설정으로 세션 재개                  |
+| `o`                         | 세션에 기록된 모델과 thinking 설정으로 재개                   |
 | `e`                         | 이름 편집. 커스텀 제목을 지정하고 목록에 `✎` 표시          |
 | `p`                         | cwd 편집. 방향키 디렉터리 브라우저로 resume / `Here` 기준 경로 지정 |
 | `d`                         | 세션 상세 (전체 prompt, 파일 경로, 크기, 시각)                |
@@ -136,10 +139,11 @@ pisesh --help
 | Alt-screen buffer   | `\x1b[?1049h` / `\x1b[?1049l`, vim·less·htop·droid CLI가 쓰는 것과 같은 원시 기법               |
 | 입력                | Node `readline.emitKeypressEvents` raw 모드                                                     |
 | 너비 계산           | UAX #11 East Asian Width 범위, ~10줄짜리 인라인 체크로 압축                                     |
-| Pi 익스텐션         | `@earendil-works/pi-coding-agent` 익스텐션 API (`ui.custom`, `tui.stop`) 의 TS 팩토리            |
+| Pi 익스텐션         | `ui.custom`, `tui.stop`, `ctx.switchSession()`을 사용하는 TS 팩토리                            |
 | 저장소              | JSON 파일 2개: `~/.pi/agent/favorites.json` (별표 id) + `~/.pi/agent/pisesh-meta.json` (세션별 제목 / cwd 오버라이드) |
 | 세션 탐색           | `~/.pi/agent/sessions/<projectSlug>/*.jsonl` 직접 파일시스템 스캔, 첫 96 KB 만 파싱              |
-| 프로세스 모델       | 슬래시 명령이 pi TUI를 멈춤 → stdio 상속으로 pisesh 스폰 → 종료 시 pi 다시 그림                  |
+| 프로세스 모델       | `/sesh`는 선택 결과로 현재 런타임 전환, 독립 실행은 새 `pi` 프로세스 시작                       |
+| 재개 설정           | `Enter`는 현재 기본값, `o`는 세션에 기록된 모델과 thinking 사용                                |
 
 ### 명시적으로 **안 쓰는** 것
 
@@ -154,7 +158,7 @@ pisesh --help
 | ---------- | ---------------------------------------------------------- |
 | 즐겨찾기   | `~/.pi/agent/favorites.json`                               |
 | 오버라이드 | `~/.pi/agent/pisesh-meta.json` (세션별 커스텀 제목 / cwd, session id로 키잉) |
-| 세션       | `~/.pi/agent/sessions/<projectSlug>/<timestamp>_<uuid>.jsonl` (pi 기본 레이아웃. pisesh는 여기 안 씀) |
+| 세션       | `~/.pi/agent/sessions/<projectSlug>/<timestamp>_<uuid>.jsonl` (끊긴 tool call 복구 때만 백업 후 수정) |
 
 즐겨찾기 파일 모양:
 
@@ -189,7 +193,7 @@ pisesh --help
   - Windows: **Windows Terminal**, **WezTerm**, **Alacritty** ✅
   - macOS: **iTerm2**, **Terminal.app**, **WezTerm**, **Alacritty**, **Kitty** ✅
   - Linux: **GNOME Terminal**, **Konsole**, **xterm**, **Alacritty**, **Kitty** ✅
-- `Enter` 재개 동작 위해 `$PATH` 상의 [`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
+- 독립 실행 `pisesh`를 사용할 때 `$PATH` 상의 [`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
 
 ## 기여
 

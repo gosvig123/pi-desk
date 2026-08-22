@@ -75,6 +75,8 @@ pi install npm:pisesh
 
 This registers pisesh as a pi extension. Inside any pi session, type `/sesh`. The extension runs its bundled CLI, so a global npm installation is not required.
 
+`/sesh` does not start a second pi process. The picker returns the selected session and options to the extension, which calls pi's official `ctx.switchSession()` API. Standalone `pisesh` keeps its shell behavior and starts `pi --session`. Custom cwd overrides require a pi version that supports `cwdOverride` on extension session switches; pisesh warns if pi ignores one.
+
 ### Install the standalone CLI
 
 ```bash
@@ -144,10 +146,10 @@ pisesh --help
 | Alt screen buffer   | `\x1b[?1049h` / `\x1b[?1049l`, the same primitive `vim`, `less`, `htop`, and droid CLI use         |
 | Input               | Node's `readline.emitKeypressEvents` in raw mode                                                 |
 | Width calculation   | UAX #11 East Asian Width ranges, compressed to ~10 inline range checks                           |
-| Pi extension        | TypeScript factory using `@earendil-works/pi-coding-agent` extension API (`ui.custom`, `tui.stop`) |
+| Pi extension        | TypeScript factory using `ui.custom`, `tui.stop`, and `ctx.switchSession()`                       |
 | Storage             | Two JSON files under `$PI_AGENT_DIR`: `favorites.json` and `pisesh-meta.json`                 |
 | Session discovery   | Direct filesystem scan of `~/.pi/agent/sessions/<projectSlug>/*.jsonl`; first 96 KB parsed       |
-| Process model       | Slash command pauses pi's TUI, spawns pisesh with inherited stdio, restarts pi on exit           |
+| Process model       | `/sesh` runs pisesh as a selector and switches the current runtime; standalone starts `pi`        |
 | Resume settings     | `Enter` uses current defaults; `o` preserves the model and thinking recorded in the session         |
 | Custom paths        | Honors `PI_AGENT_DIR` and `PI_SESSION_DIR`, including a flat custom session directory                |
 | Title generation    | Ephemeral `pi --print --no-session` call using the model and effort selected in pisesh            |
@@ -200,7 +202,7 @@ Korean / Chinese / Japanese / fullwidth characters render **2 cells wide** in te
   - Windows: **Windows Terminal**, **WezTerm**, **Alacritty** ✅
   - macOS: **iTerm2**, **Terminal.app**, **WezTerm**, **Alacritty**, **Kitty** ✅
   - Linux: **GNOME Terminal**, **Konsole**, **xterm**, **Alacritty**, **Kitty** ✅
-- [`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) on `$PATH` for the `Enter`-to-resume action
+- [`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) on `$PATH` when using standalone `pisesh`
 
 ## Contributing
 

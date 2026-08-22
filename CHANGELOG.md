@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-08-22
+
+### Changed
+- Make `/sesh` return the selected session to its extension and switch through pi's official `ctx.switchSession()` API instead of launching a nested pi process. Standalone `pisesh` still launches pi.
+- Preserve `Enter` current-default and `o` session-recorded model and thinking behavior across native session switches.
+
+### Fixed
+- Forward custom cwd overrides when supported by pi, warn when pi ignores them, and skip switching when the selected session is already active.
+- Keep interrupted-tool-call repair after confirming pi does not synthesize missing results during session loading.
+
 ## [0.2.0] - 2026-08-01
 
 ### Added

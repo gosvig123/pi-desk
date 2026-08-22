@@ -24,6 +24,12 @@ function piAgentEnv(baseEnv = process.env, agentDir = AGENT_DIR) {
   return { ...baseEnv, PI_CODING_AGENT_DIR: agentDir };
 }
 const PI_ENV = piAgentEnv();
+// The /sesh extension gives the picker a private result pipe. Standalone
+// pisesh has no such fd and keeps launching pi itself.
+const SELECT_FD = (() => {
+  const fd = Number(process.env.PISESH_SELECT_FD);
+  return Number.isInteger(fd) && fd >= 3 ? fd : null;
+})();
 const VERSION = (() => {
   for (const file of [
     path.resolve(__dirname, '../package.json'),
@@ -1477,6 +1483,38 @@ function loadResumeDefaults(settingsFile = SETTINGS_FILE) {
   } catch { return null; }
 }
 
+function loadSessionSettings(file) {
+  try {
+    const entries = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).flatMap(line => {
+      try { return [JSON.parse(line)]; } catch { return []; }
+    }).filter(entry => entry && entry.type !== 'session');
+    const byId = new Map(entries.filter(entry => entry.id).map(entry => [entry.id, entry]));
+    const branch = [];
+    const visited = new Set();
+    let entry = entries[entries.length - 1];
+    while (entry && !visited.has(entry.id)) {
+      branch.push(entry);
+      visited.add(entry.id);
+      entry = entry.parentId ? byId.get(entry.parentId) : undefined;
+    }
+    branch.reverse();
+
+    let model = '';
+    let thinking = '';
+    for (const item of branch) {
+      if (item.type === 'thinking_level_change' && typeof item.thinkingLevel === 'string') {
+        thinking = item.thinkingLevel;
+      } else if (item.type === 'model_change' && typeof item.provider === 'string' && typeof item.modelId === 'string') {
+        model = `${item.provider}/${item.modelId}`;
+      } else if (item.type === 'message' && item.message?.role === 'assistant'
+        && typeof item.message.provider === 'string' && typeof item.message.model === 'string') {
+        model = `${item.message.provider}/${item.message.model}`;
+      }
+    }
+    return { model, thinking };
+  } catch { return null; }
+}
+
 function buildResumeArgs(s, useCurrentDefaults = true, settingsFile = SETTINGS_FILE) {
   const args = ['--session', s.id, '--session-dir', path.dirname(s.file)];
   const defaults = useCurrentDefaults && loadResumeDefaults(settingsFile);
@@ -1485,27 +1523,70 @@ function buildResumeArgs(s, useCurrentDefaults = true, settingsFile = SETTINGS_F
   return args;
 }
 
-function resumeSession(s, useCurrentDefaults = true) {
-  if (!s) return;
-  // A resumed pi takes over this terminal, so stop background title work first
-  // and suppress any final render from its asynchronous close handler.
-  handingOff = true;
-  cancelGeneration();
-  // Heal orphaned tool calls before handing off, so resume can't crash the
-  // spawned pi (see healOrphanedToolCalls).
-  let repaired;
-  try { repaired = healOrphanedToolCalls(s.file); }
-  catch (error) {
-    process.stdout.write(A.exitAlt + A.showC);
-    if (process.stdin.isTTY) process.stdin.setRawMode(false);
-    console.error(`pisesh: ${error.message}`);
-    process.exit(1);
-  }
-  // Leave alt screen + show cursor so the spawned pi takes over a clean
-  // main-buffer terminal (it will manage its own alt screen).
+function buildSelection(s, useCurrentDefaults = true, repaired = 0, settingsFile = SETTINGS_FILE) {
+  const defaults = loadResumeDefaults(settingsFile);
+  const recorded = useCurrentDefaults ? null : loadSessionSettings(s.file);
+  const settings = useCurrentDefaults ? defaults : {
+    model: recorded?.model || defaults?.model || '',
+    thinking: recorded?.thinking || defaults?.thinking || '',
+  };
+  return {
+    version: 1,
+    sessionPath: path.resolve(s.file),
+    resumeMode: useCurrentDefaults ? 'defaults' : 'session',
+    ...(s.cwdOverride ? { cwdOverride: s.cwdOverride } : {}),
+    ...(settings?.model ? { model: settings.model } : {}),
+    ...(settings?.thinking ? { thinking: settings.thinking } : {}),
+    ...(repaired > 0 ? { repaired } : {}),
+  };
+}
+
+function leaveTui() {
   process.stdout.write(A.exitAlt + A.showC);
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.stdin.pause();
+}
+
+function returnSelection(selection) {
+  try {
+    fs.writeSync(SELECT_FD, `${JSON.stringify(selection)}\n`);
+  } catch (error) {
+    throw new Error(`could not return selection to pi: ${error.message}`);
+  }
+}
+
+function resumeSession(s, useCurrentDefaults = true) {
+  if (!s) return;
+  // A resumed pi or the parent extension takes over this terminal, so stop
+  // background title work and suppress its asynchronous final render.
+  handingOff = true;
+  cancelGeneration();
+
+  // Selecting the already-active session must not rewrite its live transcript.
+  if (SELECT_FD !== null && s.isCurrent) {
+    leaveTui();
+    try { returnSelection(buildSelection(s, useCurrentDefaults)); }
+    catch (error) { console.error(`pisesh: ${error.message}`); process.exit(1); }
+    process.exit(0);
+  }
+
+  // Pi still preserves a valid unfinished toolCall without adding its missing
+  // result, so repair it before either native switching or standalone resume.
+  let repaired;
+  try { repaired = healOrphanedToolCalls(s.file); }
+  catch (error) {
+    leaveTui();
+    console.error(`pisesh: ${error.message}`);
+    process.exit(1);
+  }
+  leaveTui();
+
+  if (SELECT_FD !== null) {
+    try { returnSelection(buildSelection(s, useCurrentDefaults, repaired)); }
+    catch (error) { console.error(`pisesh: ${error.message}`); process.exit(1); }
+    process.exit(0);
+  }
+
   if (repaired > 0) {
     console.log(`pisesh: repaired ${repaired} orphaned session entr${repaired === 1 ? 'y' : 'ies'}; backup: ${s.file}.bak-orphanheal`);
   }
@@ -1640,11 +1721,13 @@ function main() {
 if (require.main === module) main();
 else module.exports = {
   buildResumeArgs,
+  buildSelection,
   buildTitlePrompt,
   cleanGeneratedTitle,
   cleanStaleFavorites,
   healOrphanedToolCalls,
   loadResumeDefaults,
+  loadSessionSettings,
   parseModelEntries,
   parseModelList,
   piAgentEnv,

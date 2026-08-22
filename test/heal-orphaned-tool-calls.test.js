@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
-const { buildResumeArgs, healOrphanedToolCalls } = require('../bin/pisesh');
+const { buildResumeArgs, buildSelection, healOrphanedToolCalls, loadSessionSettings } = require('../bin/pisesh');
 const PISESH = path.resolve(__dirname, '../bin/pisesh');
 
 function entry(id, parentId, message) {
@@ -59,6 +59,57 @@ test('falls back to native session restore when settings are unavailable', () =>
   assert.deepEqual(buildResumeArgs({ id: 'session-id', file: '/sessions/session.jsonl' }, true, '/missing/settings.json'), [
     '--session', 'session-id', '--session-dir', '/sessions',
   ]);
+});
+
+test('returns a complete native-switch selection without spawning pi', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pisesh-selection-'));
+  const settingsFile = path.join(dir, 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({
+    defaultProvider: 'openai-codex',
+    defaultModel: 'gpt-5.6-sol',
+    defaultThinkingLevel: 'medium',
+  }));
+  const session = {
+    file: path.join(dir, 'session.jsonl'),
+    cwdOverride: '/work/override',
+  };
+  fs.writeFileSync(session.file, [
+    JSON.stringify({ type: 'model_change', id: 'model', parentId: null, provider: 'anthropic', modelId: 'session-model' }),
+    JSON.stringify({ type: 'thinking_level_change', id: 'thinking', parentId: 'model', thinkingLevel: 'low' }),
+  ].join('\n'));
+
+  assert.deepEqual(buildSelection(session, true, 2, settingsFile), {
+    version: 1,
+    sessionPath: session.file,
+    resumeMode: 'defaults',
+    cwdOverride: '/work/override',
+    model: 'openai-codex/gpt-5.6-sol',
+    thinking: 'medium',
+    repaired: 2,
+  });
+  assert.deepEqual(buildSelection(session, false), {
+    version: 1,
+    sessionPath: session.file,
+    resumeMode: 'session',
+    cwdOverride: '/work/override',
+    model: 'anthropic/session-model',
+    thinking: 'low',
+  });
+});
+
+test('reads the active branch model and lets assistant metadata override older model changes', () => {
+  const file = writeSession([
+    { type: 'model_change', id: 'model', parentId: null, provider: 'anthropic', modelId: 'old-model' },
+    { type: 'thinking_level_change', id: 'thinking', parentId: 'model', thinkingLevel: 'high' },
+    entry('assistant', 'thinking', {
+      role: 'assistant', provider: 'openai', model: 'latest-model', content: [],
+    }),
+  ]);
+
+  assert.deepEqual(loadSessionSettings(file), {
+    model: 'openai/latest-model',
+    thinking: 'high',
+  });
 });
 
 test('supports custom agent and flat session directories, version, and stale cleanup', () => {
