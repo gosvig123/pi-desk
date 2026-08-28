@@ -231,16 +231,7 @@ pisesh가 컨텍스트 전환 시간을 아껴주거나 pi 사용 경험을 낫�
 pisesh를 더 낫게 만든 모두에게 감사 🙏
 
 <a href="https://github.com/Blue-B"><img src="https://github.com/Blue-B.png?size=80" width="80" alt="Blue-B" title="Blue-B" /></a>
-
-## Repository activity
-
-![Repobeats analytics image](https://repobeats.axiom.co/api/embed/a21cb8addd5d2f0ea4ec229c69da5b23855911a8.svg "Repobeats analytics image")
-
-## Star History
-
-<a href="https://star-history.com/#Blue-B/pisesh&Date">
-  <img src="https://api.star-history.com/svg?repos=Blue-B/pisesh&type=Date&v=20260531" alt="Star History Chart" width="600" />
-</a>
+<a href="https://github.com/ahoereth"><img src="https://github.com/ahoereth.png?size=80" width="80" alt="ahoereth" title="ahoereth" /></a>
 
 ## 라이선스
 
