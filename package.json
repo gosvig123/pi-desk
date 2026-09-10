@@ -1,7 +1,7 @@
 {
-  "name": "pisesh",
+  "name": "pi-desk",
   "version": "0.3.0",
-  "description": "Bookmark, search, and resume pi coding-agent sessions with a fast keyboard-driven TUI.",
+  "description": "Conversations and tasks in one keyboard-driven workspace for pi.",
   "keywords": [
     "pi-package",
     "pi",
@@ -15,18 +15,19 @@
     "resume",
     "favorites"
   ],
-  "homepage": "https://github.com/Blue-B/pisesh#readme",
+  "homepage": "https://github.com/gosvig123/pi-desk#readme",
   "bugs": {
-    "url": "https://github.com/Blue-B/pisesh/issues"
+    "url": "https://github.com/gosvig123/pi-desk/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Blue-B/pisesh.git"
+    "url": "git+https://github.com/gosvig123/pi-desk.git"
   },
   "license": "MIT",
   "author": "Blue-B <source_vs@naver.com>",
   "type": "commonjs",
   "bin": {
+    "pi-desk": "bin/pisesh",
     "pisesh": "bin/pisesh"
   },
   "files": [

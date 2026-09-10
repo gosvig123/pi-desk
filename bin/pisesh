@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// pisesh — pi session bookmark & resume TUI
-// Tabs: ★ Favorites / Today / Here / All
+// pi-desk — conversations and tasks for pi
+// Tabs: Conversations (★ Favorites / Today / Here / All) / Tasks
 // Storage: $PI_AGENT_DIR/favorites.json   (starred session ids)
 //          $PI_AGENT_DIR/pisesh-meta.json (per-session title / cwd overrides)
 // Sessions: $PI_SESSION_DIR or $PI_AGENT_DIR/sessions
@@ -12,6 +12,10 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const readline = require('readline');
+const { TASKS_TAB } = require('./tasks-data');
+const { TasksView } = require('./tasks-view');
+const { CONVERSATIONS_TAB, ConversationViews } = require('./conversation-views');
+const { tabBar, navigationHint } = require('./tab-bar');
 
 // ── Paths ─────────────────────────────────────────────
 const HOME = os.homedir();
@@ -33,7 +37,7 @@ const SELECT_FD = (() => {
 const VERSION = (() => {
   for (const file of [
     path.resolve(__dirname, '../package.json'),
-    path.join(AGENT_DIR, 'npm/node_modules/pisesh/package.json'),
+    path.join(AGENT_DIR, 'npm/node_modules/pi-desk/package.json'),
   ]) {
     try { return JSON.parse(fs.readFileSync(file, 'utf8')).version; } catch {}
   }
@@ -304,7 +308,9 @@ function cleanStaleFavorites(knownSessions = sessions) {
 
 // ── State ─────────────────────────────────────────────
 let sessions = [];
-let tabs = ['★ Favorites', 'Today', 'Here', 'All'];
+const tabs = [CONVERSATIONS_TAB, TASKS_TAB];
+const conversationViews = new ConversationViews();
+const tasksView = new TasksView(() => { if (tabs[tabIdx] === TASKS_TAB && !handingOff) render(); });
 let tabIdx = 0;
 let cursor = 0;
 let filter = '';
@@ -501,20 +507,7 @@ function titleGenerationBlocker(target) {
 
 // ── Filtering by tab ──────────────────────────────────
 function visibleSessions() {
-  let list = sessions;
-  const tab = tabs[tabIdx];
-
-  if (tab.startsWith('★')) {
-    list = list.filter(s => s.favored);
-  } else if (tab === 'Today') {
-    const today = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD
-    list = list.filter(s => new Date(s.mtime).toLocaleDateString('sv-SE') === today);
-  } else if (tab === 'Here') {
-    // Only sessions whose effective cwd is the directory pisesh was launched
-    // from (trailing slashes normalized so /foo and /foo/ match).
-    const here = CURRENT_CWD.replace(/\/+$/, '');
-    list = list.filter(s => (s.effectiveCwd || '').replace(/\/+$/, '') === here);
-  }
+  let list = conversationViews.filter(sessions, CURRENT_CWD);
 
   if (filter) {
     const q = filter.toLowerCase();
@@ -620,11 +613,28 @@ function visLen(s) {
 
 // ── Render ────────────────────────────────────────────
 function render() {
+  if (tabs[tabIdx] === TASKS_TAB) return renderTasks();
   if (mode === 'edit') return renderEdit();
   if (mode === 'browse') return renderBrowse();
   if (mode === 'model') return renderModelPicker();
   if (mode === 'details') return renderDetails();
   renderList();
+}
+
+function renderTasks() {
+  const W = process.stdout.columns || 100;
+  const H = process.stdout.rows || 30;
+  const tabLine = tabBar(tabs, tabIdx, Math.max(1, W - 2), text => A.I + A.B + text + A.R);
+  const rows = tasksView.renderLines(Math.max(1, H - 8), Math.max(1, W - 2));
+  let out = A.clr + ' ' + A.B + A.cyn + 'pi-desk' + A.R + '  tasks · due date order\n\n';
+  out += ' ' + tabLine + '\n\n';
+  const board = tasksView.boardActive && tasksView.mode === 'closed' && !tasksView.picker;
+  const hint = tasksView.actions.form || tasksView.actions.saving ? tasksView.actions.help()
+    : board ? '←→ columns · ↑↓ cards · Tab tabs' : navigationHint(W - 2, false);
+  out += ' ' + A.D + trunc(hint, Math.max(1, W - 2)) + A.R + '\n';
+  out += rows.slice(0, Math.max(1, H - 8)).map(row => ' ' + row).join('\n');
+  out += '\n\n ' + trunc(tasksView.help(W - 2), Math.max(1, W - 2)) + '\n';
+  process.stdout.write(out);
 }
 
 function renderList() {
@@ -633,17 +643,17 @@ function renderList() {
   let out = A.clr;
 
   // Header
-  out += ' ' + A.B + A.cyn + 'pisesh' + A.R + A.D + '  pi session bookmarks  ' + A.R;
+  out += ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  conversations  ' + A.R;
   out += A.gry + `${sessions.length} sessions · ${favorites.size} starred` + A.R;
   out += '\n\n';
 
   // Tabs
-  let tabLine = ' ';
-  tabs.forEach((t, i) => {
-    if (i === tabIdx) tabLine += A.I + A.B + ' ' + t + ' ' + A.R + '  ';
-    else tabLine += A.D + ' ' + t + ' ' + A.R + '  ';
-  });
-  out += tabLine + '\n';
+  const tabWidth = Math.max(1, W - 2);
+  const activeTab = text => A.I + A.B + text + A.R;
+  out += ' ' + tabBar(tabs, tabIdx, tabWidth, activeTab) + '\n\n';
+  out += ' ' + conversationViews.labels(tabWidth, activeTab) + '\n';
+  const hint = mode === 'filter' ? 'Enter apply search · Esc clear search' : navigationHint(tabWidth, true);
+  out += ' ' + A.D + trunc(hint, tabWidth) + A.R + '\n';
   out += A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
 
   // Filter line
@@ -657,7 +667,7 @@ function renderList() {
   const list = visibleSessions();
   if (cursor >= list.length) cursor = Math.max(0, list.length - 1);
 
-  const headerH = (mode === 'filter' || filter) ? 7 : 5;
+  const headerH = (mode === 'filter' || filter) ? 10 : 8;
   const footerH = 4;
   const usable = Math.max(3, H - headerH - footerH);
   const start = Math.max(0, Math.min(cursor - Math.floor(usable / 2), list.length - usable));
@@ -667,12 +677,12 @@ function renderList() {
     let hint;
     if (filter) {
       hint = '(no matches — Esc clears filter)';
-    } else if (tabs[tabIdx].startsWith('★')) {
+    } else if (conversationViews.current.startsWith('★')) {
       hint = '(no favorites yet — press f on any session to star it)';
-    } else if (tabs[tabIdx] === 'Today') {
-      hint = '(no sessions today — Tab to see All)';
-    } else if (tabs[tabIdx] === 'Here') {
-      hint = `(no sessions in ${CURRENT_CWD || 'this dir'} — Tab to see All)`;
+    } else if (conversationViews.current === 'Today') {
+      hint = '(no sessions today — [ / ] switch view)';
+    } else if (conversationViews.current === 'Here') {
+      hint = `(no sessions in ${CURRENT_CWD || 'this dir'} — ] to see All)`;
     } else {
       hint = '(no sessions in this view)';
     }
@@ -743,7 +753,7 @@ function renderModelPicker() {
   const list = filteredModels();
   if (modelSel >= list.length) modelSel = Math.max(0, list.length - 1);
   let out = A.clr;
-  out += ' ' + A.B + A.cyn + 'pisesh' + A.R + A.D + '  title generation settings' + A.R + '\n\n';
+  out += ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  title generation settings' + A.R + '\n\n';
   if (settingsPendingTarget) out += ' ' + A.D + 'generate' + A.R + '  ' + trunc(settingsPendingTarget.title, W - 14) + '\n';
   out += ' ' + A.D + 'filter ' + A.R + A.cyn + modelFilter + A.R + (modelFilter ? A.I + ' ' + A.R : '') + '\n';
   out += A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
@@ -940,7 +950,7 @@ function renderEdit() {
   const s = editTarget;
   let out = A.clr;
   const label = editField === 'cwd' ? 'working directory (cwd)' : 'display title';
-  out += ' ' + A.B + A.cyn + 'pisesh' + A.R + A.D + '  edit ' + label + A.R + '\n\n';
+  out += ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  edit ' + label + A.R + '\n\n';
   if (!s) { out += ' (no session)\n'; process.stdout.write(out); return; }
 
   const row = (k, v, color = A.R) => ` ${A.D}${pad(k, 11)}${A.R} ${color}${v}${A.R}\n`;
@@ -984,7 +994,7 @@ function renderDetails() {
   const list = visibleSessions();
   const s = list[cursor];
   let out = A.clr;
-  out += ' ' + A.B + A.cyn + 'pisesh' + A.R + A.D + '  session details' + A.R + '\n\n';
+  out += ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  session details' + A.R + '\n\n';
   if (!s) { out += ' (no session)\n'; process.stdout.write(out); return; }
 
   const row = (k, v, color = A.R) => ` ${A.D}${pad(k, 11)}${A.R} ${color}${v}${A.R}\n`;
@@ -1057,7 +1067,9 @@ function setupInput() {
         cancelGeneration();
         return;
       }
-      if (mode === 'filter') handleFilter(str, key);
+      if (tabs[tabIdx] === TASKS_TAB) {
+        if (!tasksView.handle(str, key)) handleTasksNavigation(str, key);
+      } else if (mode === 'filter') handleFilter(str, key);
       else if (mode === 'edit') handleEdit(str, key);
       else if (mode === 'browse') handleBrowse(str, key);
       else if (mode === 'model') handleModelPicker(str, key);
@@ -1079,6 +1091,13 @@ function setupInput() {
   process.on('SIGTERM', () => quit());
 }
 
+function handleTasksNavigation(str, key) {
+  if ((key.ctrl && key.name === 'c') || key.name === 'q' || key.name === 'escape') return quit();
+  const backwards = key.name === 'left' || key.name === 'h';
+  tabIdx = (tabIdx + (backwards ? tabs.length - 1 : 1)) % tabs.length;
+  cursor = 0;
+}
+
 function handleList(str, key) {
   const list = visibleSessions();
   const k = key.name;
@@ -1094,6 +1113,7 @@ function handleList(str, key) {
     if (filter) { filter = ''; cursor = 0; return; }
     return quit();
   }
+  if (conversationViews.handle(str)) { cursor = 0; return; }
   if (k === 'up' || k === 'k') cursor = Math.max(0, cursor - 1);
   else if (k === 'down' || k === 'j') cursor = Math.min(list.length - 1, cursor + 1);
   else if (k === 'tab' || (k === 'right' && !filter) || k === 'l') {
@@ -1336,7 +1356,7 @@ function renderBrowse() {
   const H = process.stdout.rows || 30;
   const s = editTarget;
   let out = A.clr;
-  out += ' ' + A.B + A.cyn + 'pisesh' + A.R + A.D + '  edit cwd — pick working directory' + A.R + '\n\n';
+  out += ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  edit cwd — pick working directory' + A.R + '\n\n';
   if (!s) { out += ' (no session)\n'; process.stdout.write(out); return; }
 
   const row = (key, v, color = A.R) => ` ${A.D}${pad(key, 9)}${A.R} ${color}${v}${A.R}\n`;
@@ -1619,21 +1639,23 @@ function quit() {
 
 // ── Main ──────────────────────────────────────────────
 function printHelp() {
-  console.log(`pisesh — pi session bookmarks & resume TUI
+  console.log(`pi-desk — conversations and tasks for pi
 
 Usage:
-  pisesh                 Open interactive TUI
-  pisesh --list, -l      List starred session IDs (one per line)
-  pisesh --json          Dump favorites file as JSON
-  pisesh --star <id>     Add a session id (partial UUID ok) to favorites
-  pisesh --unstar <id>   Remove a session id from favorites
-  pisesh --clean-favorites  Remove favorites whose sessions no longer exist
-  pisesh --version, -v   Print the installed version
-  pisesh --help, -h      This help
+  pi-desk                 Open interactive TUI
+  pi-desk --list, -l      List starred session IDs (one per line)
+  pi-desk --json          Dump favorites file as JSON
+  pi-desk --star <id>     Add a session id (partial UUID ok) to favorites
+  pi-desk --unstar <id>   Remove a session id from favorites
+  pi-desk --clean-favorites  Remove favorites whose sessions no longer exist
+  pi-desk --version, -v   Print the installed version
+  pi-desk --help, -h      This help
 
 TUI keys:
   ↑↓ / j k         move cursor
-  Tab / h l        switch tab  (★ Favorites → Today → Here → All)
+  Tab / h l        switch tab  (Conversations ↔ Tasks)
+  [ / ]            switch view within Conversations (★ Favorites / Today / Here / All)
+  Tasks tab        Space complete/reopen, n add, e edit, l list, s status, / search, r reload
   f / Space        toggle favorite
   x                remove favorites whose sessions no longer exist
   Enter            resume with current default model and thinking settings
@@ -1652,7 +1674,7 @@ TUI keys:
   Ctrl-C           cancel generation and quit immediately
 
 Tabs:
-  Here             only sessions whose cwd matches the directory pisesh was
+  Here             only sessions whose cwd matches the directory pi-desk was
                    launched from (\$PISESH_CWD, else process cwd)
 
 Files:
@@ -1705,15 +1727,12 @@ function main() {
   }
 
   if (!process.stdin.isTTY) {
-    console.error('pisesh: stdin is not a TTY (use a terminal to run the TUI). Try --list or --help.');
+    console.error('pi-desk: stdin is not a TTY (use a terminal to run the TUI). Try --list or --help.');
     process.exit(1);
   }
 
   sessions = scanSessions();
-  if (sessions.length === 0) {
-    console.error('pisesh: no sessions found under', SESSIONS_ROOT);
-    process.exit(1);
-  }
+  if (sessions.length === 0) tabIdx = tabs.indexOf(TASKS_TAB);
   setupInput();
   render();
 }

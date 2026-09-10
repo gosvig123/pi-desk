@@ -23,6 +23,8 @@ permissions:
 
 jobs:
   publish:
+    # This fork is distributed through Git, not the upstream npm package.
+    if: github.repository == 'Blue-B/pisesh'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

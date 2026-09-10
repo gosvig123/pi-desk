@@ -1,15 +1,16 @@
 /**
- * pisesh slash command
+ * pi-desk slash command
  *
- * `/sesh` temporarily hands the terminal to the bundled picker. The picker
+ * `/desk` temporarily hands the terminal to the bundled picker. The picker
  * returns a session path on a private fd; this extension then asks pi to switch
- * its current runtime. Standalone `pisesh` still launches pi itself.
+ * its current runtime. Standalone `pi-desk` still launches pi itself.
  */
 
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { SessionSwitchGuard } from "../bin/session-switch.js";
 
 // Static package path, no user-controlled segments.
 const PISESH_CLI = path.resolve(__dirname, "../bin/pisesh"); // pi-lens-ignore: ts-path-traversal
@@ -132,7 +133,7 @@ function runPisesh(currentSessionId: string | undefined): Promise<PickerResult> 
 		});
 		child.on("error", (error) => {
 			process.stdout.write(
-				`\x1b[31mpisesh failed to launch: ${error.message}\x1b[0m\n`,
+				`\x1b[31mpi-desk failed to launch: ${error.message}\x1b[0m\n`,
 			);
 			finish({ code: 127, error: error.message });
 		});
@@ -144,6 +145,7 @@ function sameSession(left: string | undefined, right: string): boolean {
 }
 
 export default function (pi: ExtensionAPI) {
+	const switchGuard = new SessionSwitchGuard(pi);
 	// A successful switch loads a fresh extension instance before the old command
 	// returns. Plain pending data on globalThis lets that new instance apply the
 	// selected model and thinking without touching stale pre-switch pi/ctx objects.
@@ -196,11 +198,11 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	pi.registerCommand("sesh", {
-		description: "Browse, star, and resume pi sessions (opens pisesh TUI)",
+	pi.registerCommand("desk", {
+		description: "Browse conversations and manage tasks in pi-desk",
 		handler: async (_args, ctx) => {
 			if (ctx.mode !== "tui") {
-				ctx.ui.notify("/sesh requires pi's interactive TUI", "warning");
+				ctx.ui.notify("/desk requires pi's interactive TUI", "warning");
 				return;
 			}
 
@@ -220,11 +222,11 @@ export default function (pi: ExtensionAPI) {
 
 			if (!result) return;
 			if (result.error) {
-				ctx.ui.notify(`pisesh: ${result.error}`, "error");
+				ctx.ui.notify(`pi-desk: ${result.error}`, "error");
 				return;
 			}
 			if (result.code !== 0 && result.code !== null) {
-				ctx.ui.notify(`pisesh exited with code ${result.code}`, "warning");
+				ctx.ui.notify(`pi-desk exited with code ${result.code}`, "warning");
 				return;
 			}
 			const selection = result.selection;
@@ -235,6 +237,8 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("That session is already active", "info");
 				return;
 			}
+
+			if (!(await switchGuard.wait(ctx))) return;
 
 			const pending: PendingSwitch = {
 				sessionPath: selection.sessionPath,
@@ -261,6 +265,7 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify("Resume cancelled", "info");
 				}
 			} finally {
+				switchGuard.finish();
 				if (processState.__piseshPendingSwitch === pending) {
 					processState.__piseshPendingSwitch = undefined;
 				}
