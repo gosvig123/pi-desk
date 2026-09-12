@@ -15,7 +15,13 @@ const readline = require('readline');
 const { TASKS_TAB } = require('./tasks-data');
 const { TasksView } = require('./tasks-view');
 const { CONVERSATIONS_TAB, ConversationViews } = require('./conversation-views');
-const { tabBar, navigationHint } = require('./tab-bar');
+const { TicksView, TICKS_TAB } = require('./ticks-view');
+const { ReviewView, REVIEW_TAB } = require('./review-view');
+const { ReviewStore } = require('./review-store');
+const { collectReview } = require('./review-data');
+const { tabBar } = require('./tab-bar');
+const { keymapLines } = require('./keymap');
+const { styleTickRow } = require('./task-styles');
 
 // ── Paths ─────────────────────────────────────────────
 const HOME = os.homedir();
@@ -308,9 +314,19 @@ function cleanStaleFavorites(knownSessions = sessions) {
 
 // ── State ─────────────────────────────────────────────
 let sessions = [];
-const tabs = [CONVERSATIONS_TAB, TASKS_TAB];
+// One navigation row: every destination is a tab.
+const tabs = [CONVERSATIONS_TAB, TICKS_TAB, REVIEW_TAB, TASKS_TAB];
 const conversationViews = new ConversationViews();
-const tasksView = new TasksView(() => { if (tabs[tabIdx] === TASKS_TAB && !handingOff) render(); });
+const tasksView = new TasksView(() => { if (canRender(TASKS_TAB)) render(); });
+const ticksView = new TicksView(() => { if (canRender(TICKS_TAB)) render(); });
+const reviewStore = new ReviewStore();
+const reviewView = new ReviewView(() => { if (canRender(REVIEW_TAB)) render(); }, {
+  store: reviewStore,
+  load: () => Promise.resolve(collectReview({
+    sessions, currentId: CURRENT_SESSION_ID, reviewed: reviewStore,
+  })),
+  openConversation: entry => resumeSession(entry.session, true),
+});
 let tabIdx = 0;
 let cursor = 0;
 let filter = '';
@@ -341,6 +357,9 @@ let settingsPendingTarget = null;
 let generationJobs = []; // queued [{ target, model, effort }]
 let generationActive = false;
 let handingOff = false;
+// The first frame owns the alternate screen; background loads must not draw first.
+let uiReady = false;
+let helpOpen = false;
 
 function configuredPiModel() {
   try {
@@ -612,8 +631,46 @@ function visLen(s) {
 }
 
 // ── Render ────────────────────────────────────────────
+function canRender(tab) { return uiReady && !handingOff && tabs[tabIdx] === tab; }
+
+// Keys that work on every tab: the key map, direct tab jumps, and quit.
+function handleGlobalKey(str, key) {
+  const k = key.name;
+  if (key.ctrl && k === 'c') { quit(); return true; }
+  if (helpOpen) { helpOpen = false; return true; }
+  if (textEntryActive()) return false;
+  if (str === '?' || k === '?') { helpOpen = true; return true; }
+  if (str === 'T') return focusTab(tabs.indexOf(TICKS_TAB));
+  if (str === 'R') return focusTab(tabs.indexOf(REVIEW_TAB));
+  const jump = ['1', '2', '3', '4'].indexOf(str);
+  return jump >= 0 && jump < tabs.length ? focusTab(jump) : false;
+}
+
+// A field that takes letters and digits keeps them: no tab jump may steal input.
+function textEntryActive() {
+  if (['filter', 'edit', 'browse', 'model'].includes(mode)) return true;
+  if (tabs[tabIdx] !== TASKS_TAB) return false;
+  return tasksView.mode === 'search'
+    || Boolean(tasksView.picker || tasksView.actions.form || tasksView.actions.saving);
+}
+
+function focusTab(index) {
+  tabIdx = index;
+  cursor = 0;
+  mode = 'list';
+  ticksView.mode = 'list';
+  ticksView.confirm = '';
+  reviewView.mode = 'list';
+  if (tabs[tabIdx] === REVIEW_TAB) void reviewView.reload();
+  return true;
+}
+
 function render() {
+  if (helpOpen) return renderHelpOverlay();
   if (tabs[tabIdx] === TASKS_TAB) return renderTasks();
+  if (tabs[tabIdx] === TASKS_TAB) return renderTasks();
+  if (tabs[tabIdx] === TICKS_TAB) return renderTicks();
+  if (tabs[tabIdx] === REVIEW_TAB) return renderReview();
   if (mode === 'edit') return renderEdit();
   if (mode === 'browse') return renderBrowse();
   if (mode === 'model') return renderModelPicker();
@@ -621,40 +678,88 @@ function render() {
   renderList();
 }
 
+// One navigation row carries every destination, numbered so the jump keys are
+// visible. Counts appear only once a view has read its data.
+function tabLabels() {
+  const views = new Map([[TICKS_TAB, ticksView], [REVIEW_TAB, reviewView]]);
+  return tabs.map((label, index) => {
+    const view = views.get(label);
+    const count = view?.started ? ` (${view.visible().length})` : '';
+    return `${index + 1} ${label}${count}`;
+  });
+}
+
+function frameHeader(title, note, width) {
+  let out = A.clr + ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  ' + title + '  ' + A.R;
+  out += A.gry + note + A.R + '\n\n';
+  out += ' ' + tabBar(tabLabels(), tabIdx, width, text => A.I + A.B + text + A.R) + '\n';
+  return out;
+}
+
+function separator(W) { return A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n'; }
+
+// One footer line, only the keys that work here; ? holds the rest.
+function footerText() {
+  if (tabs[tabIdx] === TICKS_TAB) return ticksView.help();
+  if (tabs[tabIdx] === REVIEW_TAB) return reviewView.help();
+  if (tabs[tabIdx] === TASKS_TAB) return tasksView.help();
+  if (mode === 'filter') return 'Type to search · Enter apply · Esc clear';
+  return '↑↓ move · ? keys · Enter resume · d details · f star · / search';
+}
+
+function renderHelpOverlay() {
+  const W = process.stdout.columns || 100;
+  const H = process.stdout.rows || 30;
+  const width = Math.max(1, W - 2);
+  let out = A.clr + ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  keys  ' + A.R;
+  out += A.gry + 'any key closes' + A.R + '\n\n';
+  out += keymapLines(width, Math.max(1, H - 4)).map(row => ' ' + row).join('\n');
+  process.stdout.write(out);
+}
+
 function renderTasks() {
   const W = process.stdout.columns || 100;
   const H = process.stdout.rows || 30;
-  const tabLine = tabBar(tabs, tabIdx, Math.max(1, W - 2), text => A.I + A.B + text + A.R);
-  const rows = tasksView.renderLines(Math.max(1, H - 8), Math.max(1, W - 2));
-  let out = A.clr + ' ' + A.B + A.cyn + 'pi-desk' + A.R + '  tasks · due date order\n\n';
-  out += ' ' + tabLine + '\n\n';
-  const board = tasksView.boardActive && tasksView.mode === 'closed' && !tasksView.picker;
-  const hint = tasksView.actions.form || tasksView.actions.saving ? tasksView.actions.help()
-    : board ? '←→ columns · ↑↓ cards · Tab tabs' : navigationHint(W - 2, false);
-  out += ' ' + A.D + trunc(hint, Math.max(1, W - 2)) + A.R + '\n';
-  out += rows.slice(0, Math.max(1, H - 8)).map(row => ' ' + row).join('\n');
-  out += '\n\n ' + trunc(tasksView.help(W - 2), Math.max(1, W - 2)) + '\n';
+  const width = Math.max(1, W - 2);
+  const rows = tasksView.renderLines(Math.max(1, H - 7), width);
+  let out = frameHeader('tasks', 'due date order', width) + separator(W);
+  out += rows.map(row => ' ' + row).join('\n');
+  out += '\n\n ' + A.D + trunc(tasksView.help(), width) + A.R + '\n';
+  process.stdout.write(out);
+}
+
+function renderReview() {
+  const W = process.stdout.columns || 100;
+  const H = process.stdout.rows || 30;
+  const width = Math.max(1, W - 2);
+  const rows = reviewView.renderLines(Math.max(1, H - 7), width);
+  let out = frameHeader('review', 'completed replies and tick runs', width) + separator(W);
+  out += rows.map(row => ' ' + row).join('\n');
+  out += '\n\n ' + A.D + trunc(reviewView.help(), width) + A.R + '\n';
+  process.stdout.write(out);
+}
+
+function renderTicks() {
+  const W = process.stdout.columns || 100;
+  const H = process.stdout.rows || 30;
+  const width = Math.max(1, W - 2);
+  const rows = ticksView.renderLines(Math.max(1, H - 7), width);
+  let out = frameHeader('ticks', 'pi-tick jobs', width) + separator(W);
+  out += rows.map(row => ' ' + row).join('\n');
+  out += '\n\n ' + A.D + trunc(ticksView.help(), width) + A.R + '\n';
   process.stdout.write(out);
 }
 
 function renderList() {
   const W = process.stdout.columns || 100;
   const H = process.stdout.rows || 30;
-  let out = A.clr;
 
-  // Header
-  out += ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  conversations  ' + A.R;
-  out += A.gry + `${sessions.length} sessions · ${favorites.size} starred` + A.R;
-  out += '\n\n';
-
-  // Tabs
+  // Header, one navigation row, then the conversation views.
   const tabWidth = Math.max(1, W - 2);
   const activeTab = text => A.I + A.B + text + A.R;
-  out += ' ' + tabBar(tabs, tabIdx, tabWidth, activeTab) + '\n\n';
+  let out = frameHeader('conversations', `${sessions.length} sessions · ${favorites.size} starred`, tabWidth);
   out += ' ' + conversationViews.labels(tabWidth, activeTab) + '\n';
-  const hint = mode === 'filter' ? 'Enter apply search · Esc clear search' : navigationHint(tabWidth, true);
-  out += ' ' + A.D + trunc(hint, tabWidth) + A.R + '\n';
-  out += A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
+  out += separator(W);
 
   // Filter line
   if (mode === 'filter' || filter) {
@@ -667,7 +772,7 @@ function renderList() {
   const list = visibleSessions();
   if (cursor >= list.length) cursor = Math.max(0, list.length - 1);
 
-  const headerH = (mode === 'filter' || filter) ? 10 : 8;
+  const headerH = (mode === 'filter' || filter) ? 8 : 6;
   const footerH = 4;
   const usable = Math.max(3, H - headerH - footerH);
   const start = Math.max(0, Math.min(cursor - Math.floor(usable / 2), list.length - usable));
@@ -723,20 +828,8 @@ function renderList() {
   for (let i = 0; i < usable - linesUsed; i++) out += '\n';
 
   // Footer
-  out += A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
-  out += ' ' + A.D + '↑↓' + A.R + ' move  '
-      + A.D + 'Tab' + A.R + ' tab  '
-      + A.D + 'f' + A.R + ' star  '
-      + A.D + 'x' + A.R + ' clean  '
-      + A.D + 'Enter' + A.R + ' current  '
-      + A.D + 'o' + A.R + ' original  '
-      + A.D + 'e' + A.R + ' edit name  '
-      + A.D + 'g' + A.R + ' queue title  '
-      + A.D + 'G' + A.R + ' settings  '
-      + A.D + 'p' + A.R + ' edit cwd  '
-      + A.D + 'd' + A.R + ' details  '
-      + A.D + '/' + A.R + ' search  '
-      + A.D + 'q' + A.R + ' quit' + A.R + '\n';
+  out += separator(W);
+  out += ' ' + A.D + trunc(footerText(), Math.max(1, W - 2)) + A.R + '\n';
   if (notice) out += ' ' + A.cyn + notice + A.R + '\n';
 
   process.stdout.write(out);
@@ -1067,9 +1160,12 @@ function setupInput() {
         cancelGeneration();
         return;
       }
+      if (handleGlobalKey(str, key)) { render(); return; }
       if (tabs[tabIdx] === TASKS_TAB) {
         if (!tasksView.handle(str, key)) handleTasksNavigation(str, key);
-      } else if (mode === 'filter') handleFilter(str, key);
+      } else if (tabs[tabIdx] === TICKS_TAB) handleViewTab(ticksView, str, key);
+      else if (tabs[tabIdx] === REVIEW_TAB) handleViewTab(reviewView, str, key);
+      else if (mode === 'filter') handleFilter(str, key);
       else if (mode === 'edit') handleEdit(str, key);
       else if (mode === 'browse') handleBrowse(str, key);
       else if (mode === 'model') handleModelPicker(str, key);
@@ -1091,11 +1187,26 @@ function setupInput() {
   process.on('SIGTERM', () => quit());
 }
 
+// Tab / h / l cycle the navigation row. On the Tasks tab only these keys move;
+// any other unhandled key stays put.
 function handleTasksNavigation(str, key) {
-  if ((key.ctrl && key.name === 'c') || key.name === 'q' || key.name === 'escape') return quit();
-  const backwards = key.name === 'left' || key.name === 'h';
-  tabIdx = (tabIdx + (backwards ? tabs.length - 1 : 1)) % tabs.length;
-  cursor = 0;
+  const k = key.name;
+  if ((key.ctrl && k === 'c') || k === 'q' || k === 'escape') return quit();
+  const backwards = k === 'left' || k === 'h';
+  if (!['tab', 'left', 'right', 'h', 'l'].includes(k)) return;
+  focusTab((tabIdx + (backwards ? tabs.length - 1 : 1)) % tabs.length);
+}
+
+// Ticks and Review keep their own keys; q and Esc leave, except in details,
+// where Esc goes back to the list.
+function handleViewTab(view, str, key) {
+  const k = key.name;
+  if (['tab', 'left', 'right', 'h', 'l'].includes(k)) {
+    handleTasksNavigation(str, key);
+    return;
+  }
+  if ((k === 'q' || k === 'escape') && view.mode !== 'details') return quit();
+  view.handle(str, key);
 }
 
 function handleList(str, key) {
@@ -1653,8 +1764,13 @@ Usage:
 
 TUI keys:
   ↑↓ / j k         move cursor
-  Tab / h l        switch tab  (Conversations ↔ Tasks)
+  Tab / h l        next and previous tab
+  1 2 3 4          jump to Conversations, Ticks, Review, Tasks
+  T / R            jump to Ticks or Review
+  ?                show the complete key map (any key closes it)
   [ / ]            switch view within Conversations (★ Favorites / Today / Here / All)
+  Ticks view       ↑↓ move, Enter details, Space enable/disable, x run now, r reload
+  Review view      ↑↓ move, Enter opens, d details, a reviewed, A reviewed all, r reload
   Tasks tab        Space complete/reopen, n add, e edit, l list, s status, / search, r reload
   f / Space        toggle favorite
   x                remove favorites whose sessions no longer exist
@@ -1680,6 +1796,8 @@ Tabs:
 Files:
   Favorites: ${FAV_FILE}
   Overrides: ${META_FILE}
+  Ticks    : ${process.env.PI_TICK_DATA_DIR || '~/.pi/agent/tick'}/jobs.json
+  Review   : ${reviewStore.file}
   Sessions : ${SESSIONS_ROOT}/<project>/<ts>_<uuid>.jsonl`);
 }
 
@@ -1734,7 +1852,11 @@ function main() {
   sessions = scanSessions();
   if (sessions.length === 0) tabIdx = tabs.indexOf(TASKS_TAB);
   setupInput();
+  uiReady = true;
   render();
+  // Read the two side views in the background so their tab counts are real.
+  void ticksView.reload();
+  void reviewView.reload();
 }
 
 if (require.main === module) main();

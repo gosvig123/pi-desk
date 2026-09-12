@@ -16,4 +16,27 @@ function styleTaskRow(row, width) {
   return row;
 }
 
-module.exports = { styleTaskRow };
+// Ticks list rows: one job per line, so only the selected row and disabled
+// jobs carry a style.
+function styleTickRow(row, width) {
+  if (row.startsWith('▶')) {
+    return STYLE.selected + STYLE.bold + row + ' '.repeat(Math.max(0, width - displayWidth(row))) + STYLE.reset;
+  }
+  if (row.startsWith('Error:')) return STYLE.error + row + STYLE.reset;
+  if (row.includes(' · disabled ·')) return STYLE.dim + row + STYLE.reset;
+  return row;
+}
+
+// Review rows: the selected row, errors, and anything already acknowledged or
+// failed stand out; the rest stays plain.
+function styleReviewRow(row, width) {
+  if (row.startsWith('▶')) {
+    return STYLE.selected + STYLE.bold + row + ' '.repeat(Math.max(0, width - displayWidth(row))) + STYLE.reset;
+  }
+  if (row.startsWith('Error:')) return STYLE.error + row + STYLE.reset;
+  if (row.includes(' · failed')) return STYLE.warning + row + STYLE.reset;
+  if (/^Review: \d+\/\d+/.test(row) || row.startsWith('Loading')) return STYLE.dim + row + STYLE.reset;
+  return row;
+}
+
+module.exports = { styleTaskRow, styleTickRow, styleReviewRow };

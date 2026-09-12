@@ -27,9 +27,22 @@ The Tasks tab requires the `tasks` CLI from tasks-go on PATH. It uses schema
 version 1 through `tasks api lists`, `snapshot`, and `exec`. Missing task support
 does not prevent use of Conversations. Node.js 18 or newer is required.
 
+## Navigation
+
+One row holds every destination, numbered so the jump keys are visible:
+
+```
+[ 1 Conversations ]   │   2 Ticks (3)   │   3 Review (2)   │   4 Tasks
+```
+
+- `Tab` / `h` / `l` cycles the row; `1`-`4` jump straight to a tab; `T` and `R` are shortcuts for Ticks and Review.
+- `?` opens the full key map; any key closes it.
+- The footer shows only the keys that work in the current tab, so it stays readable and never fills with stale hints.
+
 ## Conversations
 
 - `Tab` switches between Conversations and Tasks.
+- `T` jumps to Ticks and `R` to Review, both now peers of Conversations on the same row.
 - `[` / `]` selects Favorites, Today, Here, or All.
 - `↑` / `↓` selects a conversation. `/` searches.
 - `f` / `Space` stars or unstars a conversation.
@@ -64,6 +77,44 @@ Small terminals show a list.
 Saves use stable task IDs and revision checks. A conflict does not overwrite newer
 data: cancel the form, reload with `r`, and edit again. pi-desk does not run task
 migration or sync commands.
+
+## Ticks
+
+The Ticks view is a tab: press `2` or `T`. Press `t` (lowercase) still links a
+conversation to a task, so the two keys do not collide. It lists the jobs of the [pi-tick](https://github.com/earendil-works/pi)
+extension from `~/.pi/agent/tick/jobs.json` and marks a job as running when its
+`active/` record has a live process. Without tick jobs the view is empty and
+nothing else changes.
+
+- `T` switches Sessions and Ticks inside the Conversations tab.
+- `↑` / `↓` selects a job; `r` reads the catalog again.
+- `Enter` / `d` opens details: schedule, next fire, last run, transcript, prompt.
+- `Space` enables or disables the job. `x` pressed twice runs it now.
+
+Enable, disable, and run go through the `pi-tick` command line, the only writer of
+the catalog. A manual run detaches, so the picker stays responsive; press `r`
+afterwards to see the new state. A disabled job cannot be started from here.
+
+## Review
+
+The Review view is a tab: press `3` or `R`. It holds completed work
+that nobody has acknowledged yet, newest first, from two sources:
+
+- **chat** — a conversation whose last message is an assistant reply.
+- **tick** — a finished pi-tick run, with the transcript output.
+
+Only the last 14 days appear, at most 200 recent conversations and 100 runs. The
+conversation you are in is never listed. The first run starts empty: everything
+already on disk is marked reviewed once, so the list shows what happens next.
+
+- `↑` / `↓` selects an entry. `Enter` opens it: a chat resumes, a tick shows its output.
+- `d` opens the detail view for either kind and marks that entry reviewed.
+- `a` marks the selected entry reviewed. `A` marks everything listed reviewed.
+- `r` reads conversations and runs again. `Esc` / `q` quits.
+
+Acknowledgements live in `~/.pi/agent/pisesh-review.json`; the newest 2000 keys
+are kept for 90 days. pi-desk only reads sessions and transcripts, so reviewing
+never changes a conversation or a tick job.
 
 ## Standalone command
 

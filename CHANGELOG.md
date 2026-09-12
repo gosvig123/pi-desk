@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- Put Conversations, Ticks, Review, and Tasks on a single numbered navigation row, with counts on Ticks and Review once their data is read. The separate Sessions/Ticks/Review row is gone.
+- Replace the fixed footer key wall (165 columns of keys, truncated on most terminals) and the duplicate hint row with one footer line that shows only the keys of the current tab, plus a `?` key map that lays itself out in columns.
+- `1`-`4` jump to a tab, `T` and `R` jump to Ticks and Review, and notices render once instead of staying in the header.
+
+### Added
+- Add a Review view inside the Conversations tab: `R` switches to it, `Enter` opens an entry, `d` opens details, `a` marks one reviewed, and `A` marks all listed reviewed. It lists conversations whose last message is an assistant reply plus finished tick runs with their output, newest first, limited to the last 14 days. Acknowledgements are stored in `~/.pi/agent/pisesh-review.json`, and the first run starts empty.
+- Add a Ticks view inside the Conversations tab: `T` switches between Sessions and Ticks, `Enter` opens job details, `Space` enables or disables a job, and `x` pressed twice runs it now. Reads `~/.pi/agent/tick/jobs.json` and the `active/` run records; writes go through the `pi-tick` CLI only.
+
 ## [0.3.0] - 2026-08-22
 
 ### Changed

@@ -169,8 +169,8 @@ class TasksView {
     if (this.mode === SEARCH) return 'Type search · Enter apply · Esc clear · Ctrl-U clear';
     if (width < 60) return this.mode === DETAILS ? '↑↓ scroll · e edit · Esc back' : '↑↓ move · Enter info · Space toggle';
     if (this.mode === DETAILS) return '↑↓ scroll · e edit · Space toggle · Esc back';
-    if (this.boardActive || width < 100) return 'Enter info · Space toggle · e edit · n add · s status · r reload';
-    return `↑↓ move · Enter details · Space toggle · e edit · n add · l lists · ${NEXT_STATUS} status · / search · r reload · q quit`;
+    if (this.boardActive || width < 100) return 'Enter info · Space toggle · e edit · s status · ? keys';
+    return `↑↓ move · Enter details · Space toggle · e edit · n add · l lists · ${NEXT_STATUS} status · / search · ? keys`;
   }
 }
 
