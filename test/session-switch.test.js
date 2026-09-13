@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { SessionSwitchGuard } = require('../bin/session-switch');
+const { SessionSwitchGuard, applyPendingSwitch } = require('../bin/session-switch');
 
 function setup(idle = false) {
   const handlers = new Map();
@@ -96,4 +96,52 @@ test('idle wait errors do not allow a switch or abort the agent', async () => {
   await assert.rejects(env.guard.wait(env.ctx), /runtime unavailable/);
   assert.equal(env.guard.switching, false);
   assert.equal(env.state.aborts, 0);
+});
+
+function resumeHarness(pending) {
+  const notices = [];
+  const applied = { models: [], thinking: [] };
+  const ctx = {
+    cwd: '/work',
+    modelRegistry: { find: (provider, id) => provider === 'openai' && id === 'gpt' ? { provider, id } : undefined },
+    ui: { notify: (message, level) => notices.push([message, level]) },
+  };
+  const pi = {
+    setModel: async model => { applied.models.push(`${model.provider}/${model.id}`); return true; },
+    setThinkingLevel: level => applied.thinking.push(level),
+  };
+  return { pending, ctx, pi, notices, applied };
+}
+
+test('a resume handoff applies the selected model and thinking', async () => {
+  const env = resumeHarness({ model: 'openai/gpt', thinking: 'high' });
+  await applyPendingSwitch(env.pending, env.ctx, env.pi);
+  assert.deepEqual(env.applied, { models: ['openai/gpt'], thinking: ['high'] });
+  assert.deepEqual(env.notices, []);
+});
+
+test('a resume handoff reports a model it cannot apply and a repair notice', async () => {
+  const env = resumeHarness({ model: 'other/missing', repaired: 2 });
+  await applyPendingSwitch(env.pending, env.ctx, env.pi);
+  assert.deepEqual(env.applied.models, []);
+  assert.equal(env.notices.length, 2);
+  assert.deepEqual(env.notices[0], ['Could not apply resume model: other/missing', 'warning']);
+  assert.match(env.notices[1][0], /Repaired 2 interrupted tool calls before resume/);
+});
+
+test('a resume handoff warns when pi ignored the cwd override', async () => {
+  const env = resumeHarness({ cwdOverride: '/elsewhere', repaired: 1 });
+  await applyPendingSwitch(env.pending, env.ctx, env.pi);
+  assert.match(env.notices[0][0], /Repaired 1 interrupted tool call before resume/);
+  assert.match(env.notices[1][0], /did not apply the selected cwd override/);
+  const same = resumeHarness({ cwdOverride: '/work' });
+  await applyPendingSwitch(same.pending, same.ctx, same.pi);
+  assert.deepEqual(same.notices, []);
+});
+
+test('a resume handoff without settings changes nothing', async () => {
+  const env = resumeHarness({ sessionPath: '/sessions/a.jsonl' });
+  await applyPendingSwitch(env.pending, env.ctx, env.pi);
+  assert.deepEqual(env.applied, { models: [], thinking: [] });
+  assert.deepEqual(env.notices, []);
 });

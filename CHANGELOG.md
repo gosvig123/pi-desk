@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Background task sync without retention, with unchanged-data probes and bounded retry backoff.
+- Bounded SSH conversation references, origin/stale indicators, manual continuation, and `/desk sync` status.
+- Associate a conversation with a task: press `t` in Conversations or details, filter, and apply. The `No task` row clears the link. Links store task IDs, so renames and list moves keep them valid.
+- Start a conversation from a task with `c` in the Tasks tab. `/desk` creates a new session in the current working directory, links it to the task, and names the session after the task.
+- Show task-linked conversations in task details and the task title on the conversation row, search, and details, resolved from the loaded task by stable ID.
+
+### Fixed
+- Report a failed task-link save as `task link not saved: <cause>` instead of showing success.
+- Lock and atomically replace the task-link file so concurrent pi-desk processes never lose a link. A lock held by a paused or crashed process is never stolen; the write fails with the lock path so a person can remove it.
+- Block writes to an unreadable or damaged task-link file instead of erasing the links it holds.
+- Create the task-link storage directory before locking, so the first write works when the agent directory does not exist yet.
+
 ## [0.3.0] - 2026-08-22
 
 ### Changed

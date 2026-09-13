@@ -12,15 +12,17 @@ const OPEN_LIST_PICKER = 'l';
 const NEXT_STATUS = 's';
 const PREVIOUS_LIST = '[';
 const NEXT_LIST = ']';
+const START_CONVERSATION = 'c';
 const CLOSED = 'closed';
 const SEARCH = 'search';
 const DETAILS = 'details';
 
 class TasksView {
-  constructor(refresh, load = loadTasks, mutate) {
+  constructor(refresh, load = loadTasks, mutate, hooks = {}) {
     this.refresh = refresh;
     this.actions = new TaskActions(this, mutate);
     this.load = load;
+    this.hooks = hooks;
     this.data = { lists: [], tasks: [], errors: [] };
     this.listIndex = 0;
     this.statusIndex = 0;
@@ -32,17 +34,23 @@ class TasksView {
     this.loading = false;
   }
 
-  async reload() {
+  async reload(background = false) {
     if (this.loading) return;
-    this.actions.error = '';
+    if (!background) this.actions.error = '';
     const firstLoad = !this.started;
     this.started = true;
     this.loading = true;
     const selectedTask = this.visible()[this.cursor];
     const previousCursor = this.cursor;
     const selected = this.data.lists[this.listIndex - 1];
-    try { this.data = await this.load(); }
-    catch (error) { this.data = { lists: [], tasks: [], errors: [safeText(error.message)] }; }
+    let data;
+    try { data = await this.load(); }
+    catch (error) { data = { lists: [], tasks: [], errors: [safeText(error.message)] }; }
+    if (background && (this.picker || this.actions.form || this.actions.saving || this.mode === 'search')) {
+      this.loading = false;
+      return;
+    }
+    this.data = data;
     const preferred = firstLoad ? this.data.currentList : selected;
     this.listIndex = preferred ? Math.max(0, this.data.lists.indexOf(preferred) + 1) : 0;
     this.picker = null;
@@ -93,7 +101,20 @@ class TasksView {
     if (['escape', 'q', 'd', 'return'].includes(k)) this.mode = CLOSED;
     else if (['down', 'j', 'pagedown'].includes(k)) this.detailOffset += k === 'pagedown' ? 5 : 1;
     else if (['up', 'k', 'pageup'].includes(k)) this.detailOffset = Math.max(0, this.detailOffset - (k === 'pageup' ? 5 : 1));
+    else if (k === START_CONVERSATION && this.startable()) {
+      this.mode = CLOSED;
+      this.hooks.startConversation(this.visible()[this.cursor]);
+    }
     return true;
+  }
+
+  // The selected task, when a conversation can be started for it.
+  startable() {
+    return Boolean(this.hooks.startConversation) && Boolean(this.visible()[this.cursor]);
+  }
+
+  linked(task) {
+    return task && this.hooks.linkedConversations ? this.hooks.linkedConversations(task.id) : [];
   }
 
   handleListAction(str, k) {
@@ -126,6 +147,7 @@ class TasksView {
     }
     else if (str === '/') this.mode = SEARCH;
     else if (k === 'r') void this.reload();
+    else if (k === START_CONVERSATION && this.startable()) this.hooks.startConversation(this.visible()[this.cursor]);
     else if ((k === 'd' || k === 'return') && this.visible()[this.cursor]) { this.mode = DETAILS; this.detailOffset = 0; }
   }
 
@@ -158,7 +180,8 @@ class TasksView {
   }
 
   detailLines(width = 78, height = 1000) {
-    const rows = detailRows(this.visible()[this.cursor], width);
+    const task = this.visible()[this.cursor];
+    const rows = detailRows(task, width, this.linked(task));
     this.detailOffset = Math.min(this.detailOffset, Math.max(0, rows.length - height));
     return rows.slice(this.detailOffset, this.detailOffset + height);
   }
@@ -167,10 +190,10 @@ class TasksView {
     if (this.actions.form) return this.actions.help();
     if (this.picker) return 'Type list name · ↑↓ select · Enter apply · Esc cancel · Tab tabs';
     if (this.mode === SEARCH) return 'Type search · Enter apply · Esc clear · Ctrl-U clear';
-    if (width < 60) return this.mode === DETAILS ? '↑↓ scroll · e edit · Esc back' : '↑↓ move · Enter info · Space toggle';
-    if (this.mode === DETAILS) return '↑↓ scroll · e edit · Space toggle · Esc back';
-    if (this.boardActive || width < 100) return 'Enter info · Space toggle · e edit · n add · s status · r reload';
-    return `↑↓ move · Enter details · Space toggle · e edit · n add · l lists · ${NEXT_STATUS} status · / search · r reload · q quit`;
+    if (width < 60) return this.mode === DETAILS ? '↑↓ scroll · e edit · c conversation · Esc back' : '↑↓ move · Enter info · Space toggle';
+    if (this.mode === DETAILS) return '↑↓ scroll · e edit · Space toggle · c conversation · Esc back';
+    if (this.boardActive || width < 100) return 'Enter info · Space toggle · e edit · n add · c conversation · s status · r reload';
+    return `↑↓ move · Enter details · Space toggle · e edit · n add · l lists · ${START_CONVERSATION} conversation · ${NEXT_STATUS} status · / search · r reload · q quit`;
   }
 }
 

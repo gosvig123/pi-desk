@@ -53,16 +53,36 @@ test('refresh preserves stable list/id selection and falls back to nearest remai
 });
 
 test('rows and scrollable details fit narrow and short terminals without repeated list names', async () => {
-  const view = new TasksView(() => {}, async () => ({ tasks: [task('Title')], lists: ['work'], errors: [] }));
+  const view = new TasksView(() => {}, async () => ({ tasks: [task('Title')], lists: ['work'], errors: [] }),
+    undefined, { linkedConversations: () => [{ id: 's', title: 'Fix build 界'.repeat(10) }] });
   await view.reload(); view.listIndex = 1;
   assert.equal(view.lines(20).filter(row => row.includes('work')).length, 1);
   key(view, 'return');
+  assert.match(view.lines(30).join('\n'), /Conversations \(1\)/);
   for (const width of [38, 78, 118]) for (const height of [5, 10, 23]) {
     const rows = view.lines(height, width);
     assert.ok(rows.length <= height && rows.every(row => displayWidth(row) <= width));
   }
   for (let i = 0; i < 100; i++) key(view, 'down');
   assert.match(view.lines(10, 38).join('\n'), /ID: Title/);
+});
+
+test('c starts a task conversation from the list and from details, and is inert without a hook', async () => {
+  const started = [];
+  const view = new TasksView(() => {}, async () => ({ tasks: [task('b'), task('c')], lists: ['work'], errors: [] }),
+    undefined, { startConversation: selected => started.push(selected.id) });
+  await view.reload();
+  view.cursor = 1;
+  key(view, 'c');
+  assert.deepEqual(started, ['c']);
+  key(view, 'return');
+  assert.equal(view.mode, 'details');
+  key(view, 'c');
+  assert.deepEqual(started, ['c', 'c']);
+  const plain = new TasksView(() => {}, async () => ({ tasks: [task('b')], lists: ['work'], errors: [] }));
+  await plain.reload();
+  assert.equal(key(plain, 'c'), true);
+  assert.equal(plain.mode, 'closed');
 });
 
 test('due states use local calendar dates and do not call completed tasks overdue', () => {

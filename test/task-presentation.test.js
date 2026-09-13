@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { TasksView } = require('../bin/tasks-view');
-const { taskRows, taskMetadata } = require('../bin/task-presentation');
+const { taskRows, taskMetadata, taskOptionLabel, detailRows } = require('../bin/task-presentation');
 const { displayWidth, ellipsize } = require('../bin/task-layout');
 const { styleTaskRow } = require('../bin/task-styles');
 const { stripVTControlCharacters } = require('node:util');
@@ -26,6 +26,22 @@ test('metadata shows subtask progress and only repeats list names in All lists',
   const parent = task('Parent', { subtasks: [task('a', { completed: true }), task('b')] });
   assert.equal(taskMetadata(parent, true), 'No due date · 1/2 subtasks · work');
   assert.equal(taskMetadata(parent, false), 'No due date · 1/2 subtasks');
+});
+
+test('the task picker row keeps completion, due date, and list inside a narrow width', () => {
+  assert.equal(taskOptionLabel(task('Ship it'), 78), '[ ] Ship it  No due date · work');
+  assert.equal(taskOptionLabel(task('Ship it', { completed: true, list: 'today' }), 78), '[x] Ship it  No due date · today');
+  for (const width of [8, 20, 38]) {
+    assert.ok(displayWidth(taskOptionLabel(task('界'.repeat(20)), width)) <= width);
+  }
+});
+
+test('task details list linked conversations without offering edits there', () => {
+  const linked = detailRows(task('Title'), 78, [{ id: 'a', title: 'Fix build' }]);
+  assert.ok(linked.includes('Conversations (1)'));
+  assert.ok(linked.includes('▸ Fix build'));
+  assert.ok(detailRows(task('Title'), 78).includes('Conversations (0)'));
+  assert.ok(detailRows(task('Title'), 78).includes('c starts a conversation for this task'));
 });
 
 test('summary follows filters and cursor position without changing task order', async () => {

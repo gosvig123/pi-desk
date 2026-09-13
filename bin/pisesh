@@ -3,6 +3,7 @@
 // Tabs: Conversations (★ Favorites / Today / Here / All) / Tasks
 // Storage: $PI_AGENT_DIR/favorites.json   (starred session ids)
 //          $PI_AGENT_DIR/pisesh-meta.json (per-session title / cwd overrides)
+//          $PI_AGENT_DIR/pisesh-task-links.json (session → task association)
 // Sessions: $PI_SESSION_DIR or $PI_AGENT_DIR/sessions
 
 'use strict';
@@ -12,10 +13,15 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const readline = require('readline');
-const { TASKS_TAB } = require('./tasks-data');
+const { TASKS_TAB, loadTasks } = require('./tasks-data');
+const { remoteConversations } = require('./remote-conversations');
 const { TasksView } = require('./tasks-view');
 const { CONVERSATIONS_TAB, ConversationViews } = require('./conversation-views');
 const { tabBar, navigationHint } = require('./tab-bar');
+const { taskLinksFile, readTaskLinks, writeTaskLink } = require('./task-links');
+const { taskIndex, taskSearchText, taskChip, taskDetailRows, conversationsForTask } = require('./task-link-meta');
+const { TaskLinkPicker, applyTaskLinkChoice } = require('./task-link-picker');
+const { buildNewConversation, taskConversationEnv } = require('./task-conversation');
 
 // ── Paths ─────────────────────────────────────────────
 const HOME = os.homedir();
@@ -23,6 +29,7 @@ const AGENT_DIR = path.resolve(process.env.PI_AGENT_DIR || process.env.PI_CODING
 const SESSIONS_ROOT = path.resolve(process.env.PI_SESSION_DIR || process.env.PI_CODING_AGENT_SESSION_DIR || path.join(AGENT_DIR, 'sessions'));
 const FAV_FILE = path.join(AGENT_DIR, 'favorites.json');
 const META_FILE = path.join(AGENT_DIR, 'pisesh-meta.json');
+const TASK_LINKS_FILE = taskLinksFile();
 const SETTINGS_FILE = path.join(AGENT_DIR, 'settings.json');
 function piAgentEnv(baseEnv = process.env, agentDir = AGENT_DIR) {
   return { ...baseEnv, PI_CODING_AGENT_DIR: agentDir };
@@ -170,6 +177,21 @@ function saveTitle(id, value, source, model, thinkingLevel) {
   saveMeta();
 }
 
+// ── Conversation → task links ──────────────────────
+// One task per session, keyed by session id, so task IDs stay stable while
+// titles and list names stay display fallbacks (see bin/task-links.js).
+// This map is the in-memory copy for rendering; the file stays source of truth.
+let taskLinks = {};
+try { taskLinks = readTaskLinks(TASK_LINKS_FILE); } catch { taskLinks = {}; }
+
+// A failed save throws, so memory is updated only after persistence succeeds.
+function setTaskLink(id, task) {
+  if (!id) return;
+  const link = writeTaskLink(id, task, TASK_LINKS_FILE);
+  if (link) taskLinks[id] = link;
+  else delete taskLinks[id];
+}
+
 // ── Project slug decode ───────────────────────────────
 // pi encodes cwd by replacing '/' with '-' and wrapping in '--…--'
 // "--mnt-c-Users-root--"                       → "/mnt/c/Users/root"
@@ -234,7 +256,7 @@ function readSessionMeta(file) {
 function scanSessions() {
   let rootEntries;
   try { rootEntries = fs.readdirSync(SESSIONS_ROOT, { withFileTypes: true }); }
-  catch { return []; }
+  catch { rootEntries = []; }
 
   const projectDirs = rootEntries
     .filter(entry => entry.isDirectory())
@@ -283,6 +305,7 @@ function scanSessions() {
         get titleModel() { return overridesFor(this.id).titleModel || ''; },
         get titleThinkingLevel() { return overridesFor(this.id).titleThinkingLevel || ''; },
         get cwdOverride() { return (overridesFor(this.id).cwd || '').trim(); },
+        get task() { return taskLinks[this.id] || null; },
         // Name shown in the list: custom title > first prompt > id fallback.
         get title() {
           return this.titleOverride || this.prompt || `(no prompt) ${this.id.slice(0, 8)}`;
@@ -292,6 +315,7 @@ function scanSessions() {
       });
     }
   }
+  results.push(...remoteConversations(AGENT_DIR).map(s => ({ ...s, get favored() { return favorites.has(this.id); } })));
   results.sort((a, b) => b.mtime - a.mtime);
   return results;
 }
@@ -310,12 +334,17 @@ function cleanStaleFavorites(knownSessions = sessions) {
 let sessions = [];
 const tabs = [CONVERSATIONS_TAB, TASKS_TAB];
 const conversationViews = new ConversationViews();
-const tasksView = new TasksView(() => { if (tabs[tabIdx] === TASKS_TAB && !handingOff) render(); });
+const tasksView = new TasksView(
+  () => { if (tabs[tabIdx] === TASKS_TAB && !handingOff) render(); },
+  loadTasks,
+  undefined,
+  { startConversation: startTaskConversation, linkedConversations: taskId => conversationsForTask(sessions, taskId) },
+);
 let tabIdx = 0;
 let cursor = 0;
 let filter = '';
 let notice = '';
-let mode = 'list';      // list | filter | details | edit | browse | model
+let mode = 'list';      // list | filter | details | edit | browse | model | task
 // edit mode state (title text editor)
 let editField = '';     // 'title' | 'cwd'
 let editBuffer = '';
@@ -325,6 +354,9 @@ let editTarget = null;  // the session being edited
 let browseDir = '';        // directory currently being browsed (absolute)
 let browseEntries = [];    // [{ label, kind:'use'|'up'|'dir', path }]
 let browseSel = 0;         // selected row in browseEntries
+// task mode state (conversation → task picker)
+let linkPicker = null;         // TaskLinkPicker while choosing a task
+let linkPickerReturn = 'list'; // mode to restore when the picker closes
 // LLM title generation state
 let models = [];
 let modelSel = 0;
@@ -507,6 +539,7 @@ function titleGenerationBlocker(target) {
 
 // ── Filtering by tab ──────────────────────────────────
 function visibleSessions() {
+  const index = taskIndex(tasksView.data.tasks);
   let list = conversationViews.filter(sessions, CURRENT_CWD);
 
   if (filter) {
@@ -515,7 +548,8 @@ function visibleSessions() {
       s.id.toLowerCase().includes(q) ||
       s.project.toLowerCase().includes(q) ||
       s.prompt.toLowerCase().includes(q) ||
-      s.title.toLowerCase().includes(q)
+      s.title.toLowerCase().includes(q) ||
+      taskSearchText(s.task, index).includes(q)
     );
   }
   return list;
@@ -617,6 +651,7 @@ function render() {
   if (mode === 'edit') return renderEdit();
   if (mode === 'browse') return renderBrowse();
   if (mode === 'model') return renderModelPicker();
+  if (mode === 'task') return linkPicker.render();
   if (mode === 'details') return renderDetails();
   renderList();
 }
@@ -630,7 +665,7 @@ function renderTasks() {
   out += ' ' + tabLine + '\n\n';
   const board = tasksView.boardActive && tasksView.mode === 'closed' && !tasksView.picker;
   const hint = tasksView.actions.form || tasksView.actions.saving ? tasksView.actions.help()
-    : board ? '←→ columns · ↑↓ cards · Tab tabs' : navigationHint(W - 2, false);
+    : board ? '←→ columns · ↑↓ cards · c conversation · Tab tabs' : navigationHint(W - 2, false);
   out += ' ' + A.D + trunc(hint, Math.max(1, W - 2)) + A.R + '\n';
   out += rows.slice(0, Math.max(1, H - 8)).map(row => ' ' + row).join('\n');
   out += '\n\n ' + trunc(tasksView.help(W - 2), Math.max(1, W - 2)) + '\n';
@@ -666,6 +701,7 @@ function renderList() {
   // List
   const list = visibleSessions();
   if (cursor >= list.length) cursor = Math.max(0, list.length - 1);
+  const index = taskIndex(tasksView.data.tasks);
 
   const headerH = (mode === 'filter' || filter) ? 10 : 8;
   const footerH = 4;
@@ -706,9 +742,11 @@ function renderList() {
           : s.titleOverride
             ? A.cyn + (s.titleSource === 'llm' ? '◆' : '✎') + A.R + ' '
             : '';
-      const titleMax = Math.max(20, W - 38 - (s.isCurrent ? 7 : 0) - (marker ? 2 : 0));
+      // Task-linked conversations show the task title before the title.
+      const chip = taskChip(s.task, index, A);
+      const titleMax = Math.max(20, W - 38 - (s.isCurrent ? 7 : 0) - (marker ? 2 : 0) - visLen(chip));
       const title = trunc(s.title, titleMax);
-      const rowText = ` ${arrow} ${star} ${ts}  ${cwd}  ${badge}${marker}${title}`;
+      const rowText = ` ${arrow} ${star} ${ts}  ${cwd}  ${badge}${marker}${chip}${title}`;
       if (sel) {
         const pad2 = ' '.repeat(Math.max(0, W - visLen(rowText) - 1));
         out += A.bgBlu + rowText + pad2 + A.R + '\n';
@@ -731,6 +769,7 @@ function renderList() {
       + A.D + 'Enter' + A.R + ' current  '
       + A.D + 'o' + A.R + ' original  '
       + A.D + 'e' + A.R + ' edit name  '
+      + A.D + 't' + A.R + ' task  '
       + A.D + 'g' + A.R + ' queue title  '
       + A.D + 'G' + A.R + ' settings  '
       + A.D + 'p' + A.R + ' edit cwd  '
@@ -832,6 +871,7 @@ function takeGenerationBatch(queue, activeCount, limit = TITLE_GENERATION_CONCUR
 
 function enqueueTitle(target) {
   if (!target) return;
+  if (target.remote) { notice = 'Edit this conversation on its origin machine'; return; }
   const blocked = titleGenerationBlocker(target);
   if (blocked) { notice = blocked; return; }
   if (!metaSettings.titleModel) return openGenerationSettings(target);
@@ -1011,6 +1051,7 @@ function renderDetails() {
   out += row('cwd', s.effectiveCwd + (s.cwdOverride ? A.cyn + '  (custom)' + A.R : ''), A.mag);
   if (s.cwdOverride) out += row('recorded', s.cwd, A.gry);
   out += row('project', s.project);
+  for (const [key, value] of taskDetailRows(s.task, taskIndex(tasksView.data.tasks), A, W)) out += row(key, value);
   const defaults = loadResumeDefaults();
   out += row('Enter uses', defaults
     ? `${defaults.model || 'session model'} / thinking ${defaults.thinking || 'session value'}`
@@ -1028,6 +1069,7 @@ function renderDetails() {
       + A.D + 'o' + A.R + ' original settings  '
       + A.D + 'f' + A.R + ' star  '
       + A.D + 'e' + A.R + ' edit name  '
+      + A.D + 't' + A.R + ' associate task  '
       + A.D + 'g' + A.R + ' generate title  '
       + A.D + 'p' + A.R + ' edit cwd  '
       + A.D + 'c' + A.R + ' copy id  '
@@ -1073,6 +1115,7 @@ function setupInput() {
       else if (mode === 'edit') handleEdit(str, key);
       else if (mode === 'browse') handleBrowse(str, key);
       else if (mode === 'model') handleModelPicker(str, key);
+      else if (mode === 'task') handleTaskPicker(str, key);
       else if (mode === 'details') handleDetails(str, key);
       else handleList(str, key);
       render();
@@ -1139,6 +1182,7 @@ function handleList(str, key) {
     notice = removed ? `removed ${removed} stale favorite${removed === 1 ? '' : 's'}` : 'no stale favorites';
   }
   else if (k === 'd') { if (list[cursor]) mode = 'details'; }
+  else if (k === 't') openTaskPicker(list[cursor]);
   else if (k === 'e') startEdit(list[cursor], 'title');
   else if (k === 'g' && (str === 'G' || key.shift)) openGenerationSettings();
   else if (k === 'g') enqueueTitle(list[cursor]);
@@ -1177,6 +1221,7 @@ function handleDetails(str, key) {
     tryCopy(s.id);
   }
   if (k === 'e' && s) startEdit(s, 'title');
+  if (k === 't' && s) openTaskPicker(s);
   if (k === 'g' && (str === 'G' || key.shift)) openGenerationSettings();
   else if (k === 'g' && s) enqueueTitle(s);
   if (k === 'p' && s) startBrowse(s);
@@ -1227,6 +1272,7 @@ function handleModelPicker(str, key) {
 // current override (or recorded cwd, so the user can tweak rather than retype).
 function startEdit(s, field) {
   if (!s) return;
+  if (s.remote) { notice = 'Edit this conversation on its origin machine'; return; }
   editTarget = s;
   editField = field;
   editBuffer = field === 'cwd' ? (s.cwdOverride || s.cwd || '') : (s.titleOverride || '');
@@ -1312,6 +1358,7 @@ function safeIsDir(p) { try { return fs.statSync(p).isDirectory(); } catch { ret
 // Enter the cwd picker for a session, seeded at its current effective cwd.
 function startBrowse(s) {
   if (!s) return;
+  if (s.remote) { notice = 'Edit this conversation on its origin machine'; return; }
   editTarget = s;
   editField = 'cwd';
   buildBrowse(s.cwdOverride || s.cwd || CURRENT_CWD || '/');
@@ -1392,6 +1439,39 @@ function renderBrowse() {
       + A.grn + A.B + 's' + A.R + A.D + ' SELECT this dir  '
       + A.D + 'Esc' + A.R + ' cancel' + A.R + '\n';
   process.stdout.write(out);
+}
+
+// ── Task association picker ───────────────────────────
+// Conversation side of the task link. Tasks come from the same CLI read the
+// Tasks tab uses, so both tabs agree on titles and IDs (see
+// bin/task-link-picker.js and bin/task-link-meta.js).
+function openTaskPicker(s) {
+  if (!s) return;
+  if (s.remote) { notice = 'Edit this conversation on its origin machine'; return; }
+  linkPickerReturn = mode === 'details' ? 'details' : 'list';
+  linkPicker = new TaskLinkPicker(s, {
+    palette: A,
+    loadTasks,
+    taskIndex: () => taskIndex(tasksView.data.tasks),
+    refresh: () => { if (mode === 'task') render(); },
+  });
+  mode = 'task';
+  linkPicker.start();
+  render();
+}
+
+function closeLinkPicker() {
+  linkPicker = null;
+  mode = linkPickerReturn;
+}
+
+function handleTaskPicker(str, key) {
+  if (key.ctrl && key.name === 'c') return quit();
+  const result = linkPicker.handle(str, key);
+  if (result?.cancelled) return closeLinkPicker();
+  if (!result) return;
+  notice = applyTaskLinkChoice(setTaskLink, linkPicker.session.id, result, taskIndex(tasksView.data.tasks));
+  closeLinkPicker();
 }
 
 function tryCopy(text) {
@@ -1577,6 +1657,14 @@ function returnSelection(selection) {
 
 function resumeSession(s, useCurrentDefaults = true) {
   if (!s) return;
+  if (s.remote) {
+    handingOff = true;
+    cancelGeneration();
+    leaveTui();
+    if (SELECT_FD !== null) returnSelection({ version: 1, remoteConversation: { notice: s.resumeNotice, command: s.resumeCommand } });
+    else console.log(`${s.resumeNotice}\n\n${s.resumeCommand}`);
+    process.exit(0);
+  }
   // A resumed pi or the parent extension takes over this terminal, so stop
   // background title work and suppress its asynchronous final render.
   handingOff = true;
@@ -1626,6 +1714,31 @@ function resumeSession(s, useCurrentDefaults = true) {
   });
 }
 
+// Hand the selected task to pi so the next conversation starts linked to it.
+// /desk answers on the private result fd; standalone pisesh spawns pi and
+// forwards the link through the environment.
+function startTaskConversation(task) {
+  if (!task || !task.id) return;
+  handingOff = true;
+  cancelGeneration();
+  leaveTui();
+  if (SELECT_FD !== null) {
+    try { returnSelection(buildNewConversation(task)); }
+    catch (error) { console.error(`pisesh: ${error.message}`); process.exit(1); }
+    process.exit(0);
+  }
+  const child = spawn('pi', [], {
+    stdio: 'inherit',
+    cwd: process.cwd(),
+    env: { ...PI_ENV, ...taskConversationEnv(task) },
+  });
+  child.on('exit', code => process.exit(code || 0));
+  child.on('error', error => {
+    console.error('Failed to spawn pi:', error.message);
+    process.exit(1);
+  });
+}
+
 function quit() {
   handingOff = true;
   for (const child of generationChildren.values()) child.kill('SIGKILL');
@@ -1656,6 +1769,8 @@ TUI keys:
   Tab / h l        switch tab  (Conversations ↔ Tasks)
   [ / ]            switch view within Conversations (★ Favorites / Today / Here / All)
   Tasks tab        Space complete/reopen, n add, e edit, l list, s status, / search, r reload
+  c (Tasks tab)    start a conversation linked to the selected task
+  t                associate the conversation with a task (Enter applies, Esc cancels)
   f / Space        toggle favorite
   x                remove favorites whose sessions no longer exist
   Enter            resume with current default model and thinking settings
@@ -1680,6 +1795,7 @@ Tabs:
 Files:
   Favorites: ${FAV_FILE}
   Overrides: ${META_FILE}
+  Task links: ${TASK_LINKS_FILE}
   Sessions : ${SESSIONS_ROOT}/<project>/<ts>_<uuid>.jsonl`);
 }
 
@@ -1735,6 +1851,16 @@ function main() {
   if (sessions.length === 0) tabIdx = tabs.indexOf(TASKS_TAB);
   setupInput();
   render();
+  // Refresh external CLI changes and reference snapshots without resetting an edit.
+  setInterval(() => {
+    if (handingOff || mode !== 'list') return;
+    const selected = visibleSessions()[cursor]?.id;
+    sessions = scanSessions();
+    const index = visibleSessions().findIndex(s => s.id === selected);
+    cursor = Math.max(0, index);
+    if (tabs[tabIdx] === TASKS_TAB && !tasksView.picker && !tasksView.actions.form && !tasksView.actions.saving && tasksView.mode !== 'search') void tasksView.reload(true);
+    render();
+  }, 30000).unref();
 }
 
 if (require.main === module) main();

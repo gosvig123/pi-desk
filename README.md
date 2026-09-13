@@ -37,12 +37,15 @@ does not prevent use of Conversations. Node.js 18 or newer is required.
 - `o` resumes with the model and thinking saved in that session.
 - `e` sets a display title. `g` queues model-generated titles; `G` opens settings.
 - `p` changes the working directory used on resume. `d` opens details.
+- `t` associates the conversation with a task. Type to filter, `Enter` applies, `Esc` cancels, and the `No task` row clears the link.
 - `r` reloads conversations. `Esc` / `q` clears search or closes the picker.
 
 `/desk` switches the current Pi session; it does not launch a second agent.
-If the agent is working, the switch waits until it finishes. Closing the picker
-leaves the current session running. Reload or session replacement cancels a queued
-switch. Custom working directory overrides require a compatible Pi version.
+If the agent is working, the switch waits until it finishes. Starting a conversation
+from a task replaces the current session with a new, task-linked session. Closing
+the picker leaves the current session running. Reload or session replacement
+cancels a queued switch. Custom working directory overrides require a compatible
+Pi version.
 
 Title generation sends up to 16 KB of session text to the selected model provider
 and may incur charges. It excludes tool results and disables tools, context files,
@@ -57,6 +60,7 @@ Small terminals show a list.
 - `l` selects a task list; `[` / `]` cycles lists.
 - `Space` completes or reopens a task.
 - `n` adds a task. `e` edits its title, due date, and description.
+- `c` starts a new conversation for the selected task. The conversation is linked to that task and named after it.
 - In the form, `Tab` changes field and `Ctrl-S` saves. `Esc` cancels.
 - `s` cycles All, Pending, and Completed. `/` searches.
 - `Enter` / `d` opens details. `r` reloads tasks.
@@ -64,6 +68,34 @@ Small terminals show a list.
 Saves use stable task IDs and revision checks. A conflict does not overwrite newer
 data: cancel the form, reload with `r`, and edit again. pi-desk does not run task
 migration or sync commands.
+
+## Cross-machine sync
+
+The separately configured background service checks tasks and conversation
+references every 30 seconds. It uses the existing task Gist and trusted SSH,
+without copying transcripts or pruning tasks. Run `/desk sync` for status.
+Remote conversations provide manual continuation guidance, not automatic resume.
+See [Cross-machine sync](docs/sync.md) for setup, limits, and service controls.
+
+## Conversation and task links
+
+One conversation can be associated with one task. The link stores the task ID,
+so task renames and list moves never break it. Task titles come from the tasks CLI
+when it answers, and from the stored fallback when it does not.
+
+- Tasks tab `c`: start a new conversation for a task. `/desk` creates the session
+  in the current working directory, links it to the task, and names it after the
+  task. The session appears in Conversations after its first assistant response.
+- Conversations tab `t` or details `t`: link or unlink an existing conversation.
+- Task details list the linked conversations. Open them from the Conversations tab.
+
+pi-desk never mutates a task for a link. The association lives in
+`~/.pi/agent/pisesh-task-links.json`. Each update takes a bounded lock and
+replaces the file atomically, so two pi-desk processes cannot lose a link. A
+lock held by a paused or crashed process is never stolen: the update fails with
+`task links are locked by another process` and names the lock file to delete
+when no pi-desk is running. A failed save is reported as
+`task link not saved: <cause>` and the previous link stays in place.
 
 ## Standalone command
 
@@ -73,9 +105,12 @@ pi-desk
 pi-desk --help
 ```
 
-The standalone command launches Pi when resuming a conversation. Pi's extension
-installation uses the bundled script and does not need this global installation.
-The old `pisesh` shell command remains an alias. The Pi command is now `/desk`.
+The standalone command launches Pi when resuming a conversation and when starting
+a task conversation. Pi's extension installation uses the bundled script and does
+not need this global installation. Task links from the standalone command need the
+same package installed as a Pi extension, because that extension records the new
+session ID. The old `pisesh` shell command remains an alias. The Pi command is now
+`/desk`.
 
 ## Data compatibility
 
@@ -83,6 +118,7 @@ Existing favorites and overrides are reused without migration:
 
 - `~/.pi/agent/favorites.json`
 - `~/.pi/agent/pisesh-meta.json`
+- `~/.pi/agent/pisesh-task-links.json` (conversation → task links)
 - `~/.pi/agent/sessions/`
 
 Existing `PISESH_*` environment variables and internal script paths remain

@@ -1,7 +1,6 @@
 'use strict';
 const { safeText } = require('./tasks-data');
 const { clip, ellipsize, wrap } = require('./task-layout');
-
 function dueLabel(task, now = new Date()) {
   if (!task.dueDate) return 'No due date';
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -38,7 +37,7 @@ function taskRows(view, height, width) {
   }).slice(0, height);
 }
 
-function detailRows(task, width) {
+function detailRows(task, width, linked = []) {
   if (!task) return ['Task no longer matches these filters.'];
   return [...wrap(task.title, width),
     `${task.completed ? 'Completed' : 'Pending'} · ${dueLabel(task)}`,
@@ -46,7 +45,20 @@ function detailRows(task, width) {
     ...wrap(task.editValues?.description || task.description || '(No description)', width),
     '', `Subtasks (${task.subtasks.length})`,
     ...task.subtasks.flatMap(item => wrap(`[${item.completed ? 'x' : ' '}] ${item.title} · ${dueLabel(item)}`, width)),
+    '', `Conversations (${linked.length})`,
+    ...linkedRows(linked, width),
     '', ...wrap(`ID: ${task.id}`, width)].map(row => clip(row, width));
 }
 
-module.exports = { dueLabel, taskMetadata, taskSummary, taskRows, detailRows };
+// Task-linked conversations are read-only here; `c` starts a new one.
+function linkedRows(linked, width) {
+  if (!linked.length) return ['c starts a conversation for this task'];
+  return linked.flatMap(entry => wrap(`▸ ${entry.title}`, width));
+}
+
+// One picker row for choosing a task, matching the task row style.
+function taskOptionLabel(task, width) {
+  return ellipsize(`[${task.completed ? 'x' : ' '}] ${task.title}  ${taskMetadata(task, true)}`, width);
+}
+
+module.exports = { dueLabel, taskMetadata, taskOptionLabel, taskRows, taskSummary, detailRows };
