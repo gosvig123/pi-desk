@@ -1,6 +1,6 @@
 # Cross-machine sync
 
-Desk uses **tasks-go** as the task source of truth. Its existing configured GitHub Gist merges task files. Conversation **references** contain only origin, session ID/path, working directory, name, modification time, and task link. They travel over your existing trusted SSH connection. Transcripts, prompts, tool output, credentials, and settings are not copied.
+Desk uses **tasks-go** as the task source of truth. Its existing configured GitHub Gist merges task files. Conversation **references** contain only origin, session ID/path, working directory, name, modification time, and task link. They travel over your existing trusted SSH connection. Finished Tick results use the same SSH snapshots. Only the final assistant reply (up to 8,000 characters), or the saved preview when unavailable, is copied with the job/run IDs, completion time, and outcome. Full transcripts, user prompts, tool messages, credentials, job definitions, and settings are not copied. Result text can contain private task information; snapshots stay in the private Desk state directory.
 
 ## Installed services
 
@@ -27,6 +27,14 @@ Failures back off from 60 seconds to at most five minutes while task files stay 
 
 Typical visibility is 30–60 seconds plus network time. The picker refreshes every 30 seconds and does not replace open edit forms. `/desk sync` shows last results and their age. Raw service status is in `desk-sync/status.json`; only error classes are recorded, never task data or tokens.
 
+## Read remote Tick results
+
+Conversations → Favorites → Tick results includes both local and remote finished runs. Remote rows show `[origin]` and `offline/stale` after two minutes without a fresh snapshot. Enter opens the synced result without accessing any remote path. Review marks stay on the viewing machine and never change the origin's run history.
+
+Jobs run only where pi-tick schedules them. Desk does not copy or enable schedules. On this installation the three migrated jobs are enabled on devbox and disabled on the Mac. Failed runs remain visible; a successful process exit does not guarantee the work succeeded, so read its result text.
+
+Each snapshot includes up to 100 recent finished runs within a 256 KiB Tick payload budget and the existing 1 MiB snapshot limit. Older results may fall outside these bounds. Last replies are read only from transcripts inside the origin's Tick runs directory. Missing transcripts fall back to saved previews. Older peers that omit Tick results remain compatible.
+
 ## Continue a conversation
 
 In `/desk`, open Conversations → All (or Today). Remote rows show `[origin]`; a snapshot older than two minutes shows `offline/stale`. Enter opens a **manual continuation** dialog with a shell command. Standalone Desk prints that command. Nothing executes automatically.
@@ -39,7 +47,7 @@ Close **that conversation** on its origin first, then run the command in a termi
 
 At most 500 most recently modified conversations are exported. A scan visits at most 20,000 file entries and reads at most a bounded header plus 64 KiB from the head and tail of each changed session; unchanged sessions use cached metadata. Names deep in an uncached transcript can be absent; unnamed sessions show their ID instead of copying prompt text. Each JSON file/transfer is limited to 1 MiB. Exceeding a limit or receiving malformed data preserves the previous peer snapshot. Paths are data, never automatic shell instructions. Manual commands use shell quoting.
 
-Only the origin replaces its snapshot. Successful snapshots remove deleted references; an unavailable origin leaves cached references visible. No peer rewrites session files, favorites, review data, or task-link sidecars. Task links are read-only reference metadata; edit them on the origin. Task conflicts remain tasks-go conflicts and require normal user resolution; the background runner never forces a push or chooses a losing source-list edit.
+Only the origin replaces its snapshot. Successful snapshots remove deleted references; an unavailable origin leaves cached references visible. No peer rewrites session files, Tick jobs or run history, favorites, review data, or task-link sidecars. Task links are read-only reference metadata; edit them on the origin. Task conflicts remain tasks-go conflicts and require normal user resolution; the background runner never forces a push or chooses a losing source-list edit.
 
 The configured Gist is the existing tasks destination, not a new upload destination. Its Git history retains the four completed tasks pruned by the pre-existing CLI startup maintenance encountered during deployment. Nothing was restored or deleted by this change.
 

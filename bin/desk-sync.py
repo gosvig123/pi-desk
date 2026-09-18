@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Private, bounded conversation references; task content stays in tasks-go."""
+"""Private, bounded conversation references and Tick results; tasks stay in tasks-go."""
+from datetime import datetime
 import fcntl
 import hashlib
 import json
@@ -77,7 +78,78 @@ def validate(data, origin):
     generated = data.get('generatedAt')
     if not isinstance(generated,(float,int)) or not 0 <= generated <= time.time()+86400:
         raise ValueError('invalid snapshot timestamp')
-    return dict(version=1, origin=origin, generatedAt=generated, sessions=clean)
+    ticks = data.get('ticks', [])
+    if not isinstance(ticks, list) or len(ticks) > 100 or len(json.dumps(ticks).encode()) > 256*1024:
+        raise ValueError('invalid Tick result count/size')
+    return dict(version=1, origin=origin, generatedAt=generated, sessions=clean,
+                ticks=[validate_tick(row) for row in ticks])
+
+
+def validate_tick(row):
+    if not isinstance(row, dict):
+        raise ValueError('invalid Tick result')
+    for key in ('jobId', 'runId'):
+        if not isinstance(row.get(key), str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', row[key]):
+            raise ValueError('invalid Tick identity')
+    finished = row.get('finishedAt')
+    if not isinstance(finished, str) or len(finished) > 40 or datetime.fromisoformat(finished.replace('Z', '+00:00')).tzinfo is None:
+        raise ValueError('invalid Tick completion time')
+    if row.get('outcome') not in ('ok', 'failed') or not isinstance(row.get('text'), str) or len(row['text']) > 8000:
+        raise ValueError('invalid Tick outcome/text')
+    return dict(jobId=row['jobId'], runId=row['runId'], finishedAt=finished, outcome=row['outcome'],
+                error=text(row.get('error')), text=''.join(c for c in row['text'] if c.isprintable() or c == '\n'))
+
+
+def tail_records(file, limit):
+    try:
+        with file.open('rb') as stream:
+            size=stream.seek(0, 2)
+            stream.seek(max(0, size-limit))
+            lines=stream.read(limit).splitlines()
+            if size > limit: lines=lines[1:]
+    except FileNotFoundError:
+        return
+    for line in reversed(lines):
+        try:
+            row=json.loads(line)
+            if isinstance(row, dict): yield row
+        except (ValueError, UnicodeError):
+            continue
+
+
+def tick_results():
+    root=Path(os.environ.get('PI_TICK_DATA_DIR', AGENT/'tick')).resolve()
+    results, seen = [], set()
+    for run in tail_records(root/'runs.jsonl', 8*1024*1024):
+        if not run.get('finishedAt'): continue
+        output=str(run.get('finalTextPreview') or '')[:8000]
+        try:
+            file=Path(run.get('transcriptPath') or '').resolve()
+            # Never read arbitrary files named by history records or peer metadata.
+            if (root/'runs') in file.parents:
+                for event in tail_records(file, 256*1024):
+                    message=event.get('message')
+                    if event.get('type') not in ('message', 'message_end') or not isinstance(message, dict) or message.get('role') != 'assistant': continue
+                    content=message.get('content')
+                    reply=content if isinstance(content, str) else '\n'.join(str(p.get('text') or '') for p in content if isinstance(p, dict) and p.get('type') == 'text') if isinstance(content, list) else ''
+                    if reply.strip():
+                        output=reply[:8000]
+                        break
+        except (OSError, ValueError, TypeError):
+            pass  # Saved preview remains available after transcript retention.
+        try:
+            row=validate_tick(dict(jobId=run.get('jobId'), runId=run.get('runId'), finishedAt=run['finishedAt'],
+                outcome='ok' if run.get('exitCode') == 0 else 'failed', error=run.get('error'), text=output))
+        except (ValueError, TypeError):
+            continue
+        key=(row['jobId'],row['runId'])
+        if key in seen: continue
+        seen.add(key)
+        # ponytail: bounded recent results, not a complete transcript archive.
+        if len(json.dumps(results+[row]).encode()) > 256*1024: break
+        results.append(row)
+        if len(results) == 100: break
+    return results
 
 
 def snapshot(config):
@@ -138,7 +210,9 @@ def snapshot(config):
         row['cwd']=override.get('cwd') or row['cwd']
         row['task']=links.get(row['id'])
         rows.append(row)
-    result=validate(dict(version=1,origin=config['origin'],generatedAt=time.time(),sessions=rows),config['origin'])
+    result=validate(dict(version=1,origin=config['origin'],generatedAt=time.time(),sessions=rows,ticks=tick_results()),config['origin'])
+    while result['ticks'] and len(json.dumps(result).encode()) > MAX_BYTES:
+        result['ticks'].pop()
     atomic(STATE/'scan-cache.json',next_cache)
     atomic(STATE/'local.json',result)
     return result

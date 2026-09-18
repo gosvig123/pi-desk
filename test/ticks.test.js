@@ -50,6 +50,33 @@ test('output comes from the run transcript, with saved preview as a fallback', t
   assert.match(resultDetails(entry, 120).join('\n'), /transcript unavailable[\s\S]*Result one/);
 });
 
+test('remote results work without local history, stay origin-owned, and never read remote paths', t => {
+  const dir = fixture(t);
+  const state = path.join(dir, 'desk-sync');
+  fs.mkdirSync(state);
+  const localFile = path.join(dir, 'private.jsonl');
+  fs.writeFileSync(localFile, JSON.stringify({ type: 'message', message: { role: 'assistant', content: 'DO NOT READ' } }));
+  fs.writeFileSync(path.join(state, 'config.json'), JSON.stringify({ peerOrigin: 'devbox' }));
+  const peer = { version: 1, origin: 'devbox', generatedAt: Date.now() / 1000, receivedAt: Date.now() / 1000,
+    ticks: [{ jobId: 'same-job', runId: 'remote-one', finishedAt: '2026-09-18T07:00:00Z',
+      outcome: 'ok', text: 'Remote final reply\nSecond line', error: '', transcriptPath: localFile }] };
+  const save = () => fs.writeFileSync(path.join(state, 'peer.json'), JSON.stringify(peer));
+  save();
+  const store = new ReviewStore(path.join(dir, 'review.json'));
+  let entries = loadTickResults(store, path.join(dir, 'tick'));
+  assert.equal(entries.length, 1);
+  assert.match(resultRow(entries[0], 200), /\[devbox\]/);
+  assert.match(resultDetails(entries[0], 200).join('\n'), /Remote final reply/);
+  assert.doesNotMatch(resultDetails(entries[0], 200).join('\n'), /DO NOT READ/);
+  store.mark([entries[0].key]);
+  entries = loadTickResults(store, path.join(dir, 'tick'));
+  assert.equal(entries[0].reviewed, true);
+  peer.generatedAt = 1; save();
+  assert.match(resultRow(loadTickResults(store, path.join(dir, 'tick'))[0], 200), /offline\/stale/);
+  peer.origin = 'unexpected'; save();
+  assert.deepEqual(loadTickResults(store, path.join(dir, 'tick')), []);
+});
+
 test('missing results are empty, unreadable results report an error, and history is bounded', t => {
   const dir = fixture(t);
   const store = { has: () => false };

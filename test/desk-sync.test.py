@@ -44,6 +44,38 @@ class DeskSyncTest(unittest.TestCase):
             file.unlink()
             self.assertEqual(sync.snapshot({'origin':'mac'})['sessions'],[])
 
+    def test_tick_results_export_only_bounded_final_replies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sync.AGENT=Path(directory)
+            sync.STATE=sync.AGENT/'desk-sync'
+            tick=sync.AGENT/'tick'
+            (tick/'runs').mkdir(parents=True)
+            transcript=tick/'runs/run.jsonl'
+            transcript.write_text('\n'.join(map(json.dumps,[
+                dict(type='message',message=dict(role='user',content='PRIVATE PROMPT')),
+                dict(type='message',message=dict(role='assistant',content=[dict(type='text',text='Final reply\nSecond line')]))
+            ]))+'\n')
+            row=dict(jobId='daily-check',runId='run-one',finishedAt='2026-09-18T07:00:00Z',exitCode=0,
+                     transcriptPath=str(transcript),finalTextPreview='Preview',prompt='PRIVATE JOB')
+            (tick/'runs.jsonl').write_text(json.dumps(row)+'\n')
+            snapshot=sync.snapshot(dict(origin='devbox'))
+            self.assertEqual(snapshot['ticks'][0]['text'],'Final reply\nSecond line')
+            self.assertNotIn('PRIVATE',json.dumps(snapshot))
+            self.assertNotIn('transcriptPath',snapshot['ticks'][0])
+            self.assertEqual(sync.validate(snapshot,'devbox')['ticks'],snapshot['ticks'])
+            legacy=dict(snapshot);del legacy['ticks']
+            self.assertEqual(sync.validate(legacy,'devbox')['ticks'],[])
+            bad=dict(snapshot,ticks=[dict(snapshot['ticks'][0],outcome='unknown')])
+            with self.assertRaises(ValueError):sync.validate(bad,'devbox')
+            row['transcriptPath']=str(sync.AGENT/'outside.jsonl')
+            (sync.AGENT/'outside.jsonl').write_text(transcript.read_text())
+            (tick/'runs.jsonl').write_text(json.dumps(row)+'\n')
+            self.assertEqual(sync.snapshot(dict(origin='devbox'))['ticks'][0]['text'],'Preview')
+            (tick/'runs.jsonl').write_text('\n'.join(json.dumps(dict(row,runId=f'run-{i}',finalTextPreview='界'*9000)) for i in range(120)))
+            bounded=sync.snapshot(dict(origin='devbox'))
+            self.assertLessEqual(len(bounded['ticks']),100)
+            self.assertLessEqual(len(json.dumps(bounded['ticks']).encode()),256*1024)
+
     def test_overlapping_service_run_does_no_work(self):
         with tempfile.TemporaryDirectory() as directory:
             sync.AGENT=Path(directory)

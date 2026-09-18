@@ -124,9 +124,12 @@ kept for 90 days. Reviewing never changes transcripts or tick jobs.
 
 ## Cross-machine sync
 
-The separately configured background service checks tasks and conversation
-references every 30 seconds. It uses the existing task Gist and trusted SSH,
-without copying transcripts or pruning tasks. Run `/desk sync` for status.
+The separately configured background service checks tasks, conversation
+references, and finished Tick results every 30 seconds. It uses the existing
+task Gist and trusted SSH, without copying full transcripts or pruning tasks.
+Remote Tick results appear in Favorites with `[origin]`; Enter opens the synced
+final reply (up to 8,000 characters, with saved preview fallback). Schedules and
+review marks stay on their own machines. Run `/desk sync` for status.
 Remote conversations provide manual continuation guidance, not automatic resume.
 See [Cross-machine sync](docs/sync.md) for setup, limits, and service controls.
 
