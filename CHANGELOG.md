@@ -4,9 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Put Conversations, Ticks, Review, and Tasks on a single numbered navigation row, with counts on Ticks and Review once their data is read. The separate Sessions/Ticks/Review row is gone.
+- Replace the fixed footer key wall (165 columns of keys, truncated on most terminals) and the duplicate hint row with one footer line that shows only the keys of the current tab, plus a `?` key map that lays itself out in columns.
+- `1`-`4` jump to a tab, `T` and `R` jump to Ticks and Review, and notices render once instead of staying in the header.
+
 ### Added
 - Background task sync without retention, with unchanged-data probes and bounded retry backoff.
 - Bounded SSH conversation references, origin/stale indicators, manual continuation, and `/desk sync` status.
+- Add a Review view inside the Conversations tab: `R` switches to it, `Enter` opens an entry, `d` opens details, `a` marks one reviewed, and `A` marks all listed reviewed. It lists conversations whose last message is an assistant reply plus finished tick runs with their output, newest first, limited to the last 14 days. Acknowledgements are stored in `~/.pi/agent/pisesh-review.json`, and the first run starts empty.
+- Add a Ticks view inside the Conversations tab: `T` switches between Sessions and Ticks, `Enter` opens job details, `Space` enables or disables a job, and `x` pressed twice runs it now. Reads `~/.pi/agent/tick/jobs.json` and the `active/` run records; writes go through the `pi-tick` CLI only.
 - Associate a conversation with a task: press `t` in Conversations or details, filter, and apply. The `No task` row clears the link. Links store task IDs, so renames and list moves keep them valid.
 - Start a conversation from a task with `c` in the Tasks tab. `/desk` creates a new session in the current working directory, links it to the task, and names the session after the task.
 - Show task-linked conversations in task details and the task title on the conversation row, search, and details, resolved from the loaded task by stable ID.

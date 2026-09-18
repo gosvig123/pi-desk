@@ -27,18 +27,37 @@ The Tasks tab requires the `tasks` CLI from tasks-go on PATH. It uses schema
 version 1 through `tasks api lists`, `snapshot`, and `exec`. Missing task support
 does not prevent use of Conversations. Node.js 18 or newer is required.
 
+## Navigation
+
+One row holds every destination, numbered so the jump keys are visible:
+
+```
+[ 1 Conversations ]   │   2 Tasks
+```
+
+- `Tab` switches tabs; `1` and `2` jump to Conversations and Tasks. Letter keys do not change tabs.
+- `?` opens the full key map; any key closes it.
+- The footer shows only the keys that work in the current tab, so it stays readable and never fills with stale hints.
+
 ## Conversations
 
 - `Tab` switches between Conversations and Tasks.
 - `[` / `]` selects Favorites, Today, Here, or All.
 - `↑` / `↓` selects a conversation. `/` searches.
-- `f` / `Space` stars or unstars a conversation.
+- `f` / `Space` stars or unstars a conversation. Unstarring also cancels its snooze.
+- `s` snoozes a conversation, or restores one selected in Snoozed.
 - `Enter` resumes with current default model and thinking settings.
 - `o` resumes with the model and thinking saved in that session.
 - `e` sets a display title. `g` queues model-generated titles; `G` opens settings.
 - `p` changes the working directory used on resume. `d` opens details.
 - `t` associates the conversation with a task. Type to filter, `Enter` applies, `Esc` cancels, and the `No task` row clears the link.
-- `r` reloads conversations. `Esc` / `q` clears search or closes the picker.
+- `r` reloads conversations and tick results. `Esc` / `q` clears search or closes the picker.
+
+Conversation rows put the title first, then the project and time when there is
+space. Full paths, title origin, model settings, and task links stay in details.
+Favorites has three stacked sections: **Favorites**, **Snoozed**, and **Tick results**.
+Arrow keys move through them in order, skipping empty sections. Search applies
+to all three sections. Today, Here, and All remain conversation-only views.
 
 `/desk` switches the current Pi session; it does not launch a second agent.
 If the agent is working, the switch waits until it finishes. Starting a conversation
@@ -68,6 +87,40 @@ Small terminals show a list.
 Saves use stable task IDs and revision checks. A conflict does not overwrite newer
 data: cancel the form, reload with `r`, and edit again. pi-desk does not run task
 migration or sync commands.
+
+## Snoozed conversations
+
+Press `s` on a local conversation. Leave the duration blank for no timer, or use
+`30m`, `2h`, `1d`, or `1w` (up to 365 days). `Enter` confirms; `Esc` cancels.
+Snoozing stars the conversation and moves it out of active Favorites. Press `s`
+on a snoozed conversation to restore it immediately.
+
+Timed snoozes return to Favorites at the next list refresh (within 30 seconds
+while the list is open), or when the picker is reopened. No background job is
+created. Snoozes are stored alongside title overrides in `pisesh-meta.json` and
+do not change session history. They do not hide conversations from Today, Here,
+or All. Remote conversations must be snoozed on their origin machine.
+
+## Tick results
+
+The bottom section of Favorites reads finished runs from
+`~/.pi/agent/tick/runs.jsonl` (or `PI_TICK_DATA_DIR`). It shows up to 100 recent
+runs, one row per run, newest first. Rows show result previews, not job prompts
+or schedules. Each result is marked **new** or **reviewed**. Existing review
+marks are reused; unmarked results start as new, including on first use.
+
+- `Enter` / `d` opens the output and marks that run reviewed.
+- `a` marks the selected run reviewed without opening it.
+- `↑` / `↓` scrolls output; `Esc` returns to the list.
+- Reviewed results stay visible. Conversation favorites do not have review badges.
+
+Output uses the last assistant reply found in the final 256 KB of the run
+transcript, up to 32,000 characters. If unavailable, it shows the saved preview.
+The details include the transcript path. The list refreshes every 30 seconds or
+with `r`. Job enable/disable/run controls remain in pi-tick, not pi-desk.
+
+Review marks live in `~/.pi/agent/pisesh-review.json`; the newest 2000 keys are
+kept for 90 days. Reviewing never changes transcripts or tick jobs.
 
 ## Cross-machine sync
 

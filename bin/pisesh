@@ -17,9 +17,14 @@ const { TASKS_TAB, loadTasks } = require('./tasks-data');
 const { remoteConversations } = require('./remote-conversations');
 const { TasksView } = require('./tasks-view');
 const { CONVERSATIONS_TAB, ConversationViews } = require('./conversation-views');
-const { tabBar, navigationHint } = require('./tab-bar');
+const { ReviewStore } = require('./review-store');
+const { loadTickResults, resultRow, resultDetails } = require('./tick-results');
+const { isSnoozed, snoozeDeadline, favoriteSections, sectionRows } = require('./favorite-sections');
+const { tabBar } = require('./tab-bar');
+const { SECTIONS, keymapLines } = require('./keymap');
+const { clip, ellipsize, displayWidth, wrap: wrapRows } = require('./task-layout');
 const { taskLinksFile, readTaskLinks, writeTaskLink } = require('./task-links');
-const { taskIndex, taskSearchText, taskChip, taskDetailRows, conversationsForTask } = require('./task-link-meta');
+const { taskIndex, taskSearchText, taskDetailRows, conversationsForTask } = require('./task-link-meta');
 const { TaskLinkPicker, applyTaskLinkChoice } = require('./task-link-picker');
 const { buildNewConversation, taskConversationEnv } = require('./task-conversation');
 
@@ -97,9 +102,10 @@ function saveFavorites(set) {
   const data = { ids: [...set], updated: new Date().toISOString() };
   try {
     fs.mkdirSync(path.dirname(FAV_FILE), { recursive: true });
-    fs.writeFileSync(FAV_FILE, JSON.stringify(data, null, 2));
+    fs.writeFileSync(`${FAV_FILE}.tmp`, JSON.stringify(data, null, 2));
+    fs.renameSync(`${FAV_FILE}.tmp`, FAV_FILE);
   } catch (e) {
-    console.error('save favorites failed:', e.message);
+    throw new Error(`save favorites failed: ${e.message}`);
   }
 }
 
@@ -123,9 +129,10 @@ function saveMeta() {
   const data = { settings: metaSettings, overrides: meta, updated: new Date().toISOString() };
   try {
     fs.mkdirSync(path.dirname(META_FILE), { recursive: true });
-    fs.writeFileSync(META_FILE, JSON.stringify(data, null, 2));
+    fs.writeFileSync(`${META_FILE}.tmp`, JSON.stringify(data, null, 2));
+    fs.renameSync(`${META_FILE}.tmp`, META_FILE);
   } catch (e) {
-    console.error('save meta failed:', e.message);
+    throw new Error(`save meta failed: ${e.message}`);
   }
 }
 
@@ -298,6 +305,7 @@ function scanSessions() {
         prompt: meta.firstPrompt || '',
         size: st.size,
         get favored() { return favorites.has(this.id); },
+        get snoozedUntil() { return overridesFor(this.id).snoozedUntil; },
         get isCurrent() { return CURRENT_SESSION_ID !== '' && this.id === CURRENT_SESSION_ID; },
         // User overrides (sidecar meta). cwd: from is the original recorded cwd.
         get titleOverride() { return (overridesFor(this.id).title || '').trim(); },
@@ -335,18 +343,23 @@ let sessions = [];
 const tabs = [CONVERSATIONS_TAB, TASKS_TAB];
 const conversationViews = new ConversationViews();
 const tasksView = new TasksView(
-  () => { if (tabs[tabIdx] === TASKS_TAB && !handingOff) render(); },
+  () => { if (canRender(TASKS_TAB)) render(); },
   loadTasks,
   undefined,
   { startConversation: startTaskConversation, linkedConversations: taskId => conversationsForTask(sessions, taskId) },
 );
+const reviewStore = new ReviewStore();
+let tickResults = [];
+let tickError = '';
+let resultOffset = 0;
+let resultLines = [];
 let tabIdx = 0;
 let cursor = 0;
+let detailsTarget = null;
 let filter = '';
 let notice = '';
-let mode = 'list';      // list | filter | details | edit | browse | model | task
+let mode = 'list';      // list | filter | details | edit | snooze | result | browse | model | task
 // edit mode state (title text editor)
-let editField = '';     // 'title' | 'cwd'
 let editBuffer = '';
 let editCursor = 0;     // caret position (code-point index into editBuffer)
 let editTarget = null;  // the session being edited
@@ -373,6 +386,9 @@ let settingsPendingTarget = null;
 let generationJobs = []; // queued [{ target, model, effort }]
 let generationActive = false;
 let handingOff = false;
+// The first frame owns the alternate screen; background loads must not draw first.
+let uiReady = false;
+let helpOpen = false;
 
 function configuredPiModel() {
   try {
@@ -538,21 +554,30 @@ function titleGenerationBlocker(target) {
 }
 
 // ── Filtering by tab ──────────────────────────────────
-function visibleSessions() {
+function matchesFilter(item) {
+  if (!filter) return true;
   const index = taskIndex(tasksView.data.tasks);
-  let list = conversationViews.filter(sessions, CURRENT_CWD);
+  return [item.id, item.project, item.prompt, item.title, item.runId, taskSearchText(item.task, index)]
+    .some(value => String(value || '').toLowerCase().includes(filter.toLowerCase()));
+}
 
-  if (filter) {
-    const q = filter.toLowerCase();
-    list = list.filter(s =>
-      s.id.toLowerCase().includes(q) ||
-      s.project.toLowerCase().includes(q) ||
-      s.prompt.toLowerCase().includes(q) ||
-      s.title.toLowerCase().includes(q) ||
-      taskSearchText(s.task, index).includes(q)
-    );
+function visibleSections() {
+  return favoriteSections(sessions, tickResults).map(section => ({
+    ...section, items: section.items.filter(matchesFilter),
+  }));
+}
+
+function visibleItems() {
+  return conversationViews.index === 0 ? visibleSections().flatMap(section => section.items)
+    : conversationViews.filter(sessions, CURRENT_CWD).filter(matchesFilter);
+}
+
+function reloadResults() {
+  try {
+    reviewStore.reviewed = new ReviewStore(reviewStore.file).reviewed;
+    tickResults = loadTickResults(reviewStore); tickError = '';
   }
-  return list;
+  catch (error) { tickError = error.message; }
 }
 
 // ── Format helpers ────────────────────────────────────
@@ -571,73 +596,14 @@ function fmtSize(n) {
   return (n / 1024 / 1024).toFixed(1) + 'M';
 }
 
-// Returns the visible cell width of a character. CJK ideographs,
-// Hangul syllables, fullwidth forms, and most emoji render 2 cells wide
-// in modern terminals; everything else is 1. Without this every row that
-// contains Korean/Chinese/Japanese text would silently wrap, breaking the
-// fixed-column TUI layout. Based on the East Asian Width property
-// (UAX #11) compressed to the ranges that actually appear in practice.
-function charWidth(cp) {
-  if (cp < 0x1100) return 1;
-  if (
-    (cp >= 0x1100 && cp <= 0x115f) ||                 // Hangul Jamo
-    cp === 0x2329 || cp === 0x232a ||
-    (cp >= 0x2e80 && cp <= 0x303e) ||                 // CJK Radicals/Kangxi
-    (cp >= 0x3041 && cp <= 0x33ff) ||                 // Hiragana/Katakana/CJK Symbols
-    (cp >= 0x3400 && cp <= 0x4dbf) ||                 // CJK Ext A
-    (cp >= 0x4e00 && cp <= 0x9fff) ||                 // CJK Unified
-    (cp >= 0xa000 && cp <= 0xa4cf) ||                 // Yi
-    (cp >= 0xac00 && cp <= 0xd7a3) ||                 // Hangul Syllables
-    (cp >= 0xf900 && cp <= 0xfaff) ||                 // CJK Compat
-    (cp >= 0xfe30 && cp <= 0xfe4f) ||                 // CJK Compat Forms
-    (cp >= 0xff00 && cp <= 0xff60) ||                 // Fullwidth ASCII
-    (cp >= 0xffe0 && cp <= 0xffe6) ||                 // Fullwidth signs
-    (cp >= 0x1f300 && cp <= 0x1f64f) ||               // Emoji symbols
-    (cp >= 0x1f680 && cp <= 0x1f6ff) ||               // Transport/map
-    (cp >= 0x1f900 && cp <= 0x1f9ff) ||               // Supplemental symbols
-    (cp >= 0x20000 && cp <= 0x2fffd)                  // CJK Ext B-F
-  ) return 2;
-  return 1;
-}
-
-function displayWidth(s) {
-  if (!s) return 0;
-  let w = 0;
-  for (const ch of s) w += charWidth(ch.codePointAt(0));
-  return w;
-}
-
-// Pad `s` to exactly `n` display cells. If wider, truncate; if narrower,
-// right-pad with spaces. Operates on cells, not code units.
+// Keep conversation whitespace and padding rules; share grapheme-aware layout.
 function pad(s, n) {
-  if (!s) s = '';
-  const w = displayWidth(s);
-  if (w === n) return s;
-  if (w < n) return s + ' '.repeat(n - w);
-  // Wider than n — truncate character-by-character.
-  let out = '', cur = 0;
-  for (const ch of s) {
-    const cw = charWidth(ch.codePointAt(0));
-    if (cur + cw > n) break;
-    out += ch; cur += cw;
-  }
-  if (cur < n) out += ' '.repeat(n - cur);
-  return out;
+  const text = clip(s, n);
+  return text + ' '.repeat(Math.max(0, n - displayWidth(text)));
 }
 
-// Truncate `s` so that displayWidth(out) ≤ maxWidth, appending '…' when
-// truncated. Whitespace runs (including newlines) collapse to one space.
 function trunc(s, maxWidth) {
-  if (!s) return '';
-  s = s.replace(/\s+/g, ' ').trim();
-  if (displayWidth(s) <= maxWidth) return s;
-  let out = '', cur = 0;
-  for (const ch of s) {
-    const cw = charWidth(ch.codePointAt(0));
-    if (cur + cw > maxWidth - 1) break;     // reserve 1 cell for the …
-    out += ch; cur += cw;
-  }
-  return out + '…';
+  return ellipsize((s || '').replace(/\s+/g, ' ').trim(), maxWidth);
 }
 
 function visLen(s) {
@@ -646,8 +612,41 @@ function visLen(s) {
 }
 
 // ── Render ────────────────────────────────────────────
+function canRender(tab) { return uiReady && !handingOff && tabs[tabIdx] === tab; }
+
+// Keys that work on every tab: the key map, direct tab jumps, and quit.
+function handleGlobalKey(str, key) {
+  const k = key.name;
+  if (key.ctrl && k === 'c') { quit(); return true; }
+  if (helpOpen) { helpOpen = false; return true; }
+  if (textEntryActive()) return false;
+  if (str === '?' || k === '?') { helpOpen = true; return true; }
+  const jump = ['1', '2'].indexOf(str);
+  return jump >= 0 && jump < tabs.length ? focusTab(jump) : false;
+}
+
+// A field that takes letters and digits keeps them: no tab jump may steal input.
+function textEntryActive() {
+  if (['filter', 'edit', 'snooze', 'browse', 'model', 'task'].includes(mode)) return true;
+  if (tabs[tabIdx] !== TASKS_TAB) return false;
+  return tasksView.mode === 'search'
+    || Boolean(tasksView.picker || tasksView.actions.form || tasksView.actions.saving);
+}
+
+function focusTab(index) {
+  tabIdx = index;
+  cursor = 0;
+  detailsTarget = null;
+  mode = 'list';
+  if (tabs[tabIdx] === CONVERSATIONS_TAB) reloadResults();
+  return true;
+}
+
 function render() {
-  if (tabs[tabIdx] === TASKS_TAB) return renderTasks();
+  if (helpOpen) return renderHelpOverlay();
+  if (tabs[tabIdx] === TASKS_TAB) return renderView(tasksView);
+  if (mode === 'result') return renderResult();
+  if (mode === 'snooze') return renderSnooze();
   if (mode === 'edit') return renderEdit();
   if (mode === 'browse') return renderBrowse();
   if (mode === 'model') return renderModelPicker();
@@ -656,129 +655,158 @@ function render() {
   renderList();
 }
 
-function renderTasks() {
+function frameHeader(width) {
+  const labels = tabs.map((label, index) => `${index + 1} ${label}`);
+  return A.clr + ' ' + tabBar(labels, tabIdx, width, text => A.I + A.B + text + A.R) + '\n';
+}
+
+function separator(W) { return A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n'; }
+
+// One footer line, only the keys that work here; ? holds the rest.
+function footerText() {
+  if (tabs[tabIdx] === TASKS_TAB) return tasksView.help();
+  if (mode === 'filter') return 'Type search · Enter apply · Esc clear';
+  const item = visibleItems()[cursor];
+  if (item?.kind === 'tick') return 'Enter output · a reviewed · ? keys';
+  if (item && isSnoozed(item)) return 's restore · Enter resume · ? keys';
+  return 'Enter resume · s snooze · ? keys';
+}
+
+function renderHelpOverlay() {
   const W = process.stdout.columns || 100;
   const H = process.stdout.rows || 30;
-  const tabLine = tabBar(tabs, tabIdx, Math.max(1, W - 2), text => A.I + A.B + text + A.R);
-  const rows = tasksView.renderLines(Math.max(1, H - 8), Math.max(1, W - 2));
-  let out = A.clr + ' ' + A.B + A.cyn + 'pi-desk' + A.R + '  tasks · due date order\n\n';
-  out += ' ' + tabLine + '\n\n';
-  const board = tasksView.boardActive && tasksView.mode === 'closed' && !tasksView.picker;
-  const hint = tasksView.actions.form || tasksView.actions.saving ? tasksView.actions.help()
-    : board ? '←→ columns · ↑↓ cards · c conversation · Tab tabs' : navigationHint(W - 2, false);
-  out += ' ' + A.D + trunc(hint, Math.max(1, W - 2)) + A.R + '\n';
-  out += rows.slice(0, Math.max(1, H - 8)).map(row => ' ' + row).join('\n');
-  out += '\n\n ' + trunc(tasksView.help(W - 2), Math.max(1, W - 2)) + '\n';
+  const width = Math.max(1, W - 2);
+  let out = A.clr + ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  keys  ' + A.R;
+  out += A.gry + 'any key closes' + A.R + '\n\n';
+  out += keymapLines(width, Math.max(1, H - 4)).map(row => ' ' + row).join('\n');
   process.stdout.write(out);
+}
+
+function renderView(view) {
+  const W = process.stdout.columns || 100;
+  const H = process.stdout.rows || 30;
+  const width = Math.max(1, W - 2);
+  const rows = view.renderLines(Math.max(1, H - 5), width);
+  let out = frameHeader(width) + separator(W);
+  out += rows.map(row => ' ' + row).join('\n');
+  out += '\n\n ' + A.D + trunc(view.help(), width) + A.R + '\n';
+  process.stdout.write(out);
+}
+
+function itemRow(item, width, selected) {
+  let text;
+  if (item.kind === 'tick') text = resultRow(item, Math.max(0, width - 2));
+  else {
+    const pending = generationChildren.has(item.id) ? '↻ ' : generationJobs.some(job => job.target.id === item.id) ? '… ' : '';
+    const badge = item.isCurrent ? '[NOW] ' : item.favored ? '★ ' : '';
+    const snooze = isSnoozed(item) ? (item.snoozedUntil ? `until ${fmtTs(item.snoozedUntil)}` : 'no timer') : '';
+    const metadata = width >= 60 ? `  ${pad(shortCwd(item.effectiveCwd || ''), 14)}  ${snooze || fmtTs(item.mtime)}` : '';
+    const titleWidth = Math.max(0, width - 2 - displayWidth(metadata));
+    text = pad(trunc(`${badge}${pending}${item.title}`, titleWidth), titleWidth) + metadata;
+  }
+  const row = `${selected ? '▶' : ' '} ${text}`;
+  return selected ? A.bgBlu + row + ' '.repeat(Math.max(0, width - visLen(row))) + A.R : row;
 }
 
 function renderList() {
   const W = process.stdout.columns || 100;
   const H = process.stdout.rows || 30;
-  let out = A.clr;
-
-  // Header
-  out += ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  conversations  ' + A.R;
-  out += A.gry + `${sessions.length} sessions · ${favorites.size} starred` + A.R;
-  out += '\n\n';
-
-  // Tabs
-  const tabWidth = Math.max(1, W - 2);
-  const activeTab = text => A.I + A.B + text + A.R;
-  out += ' ' + tabBar(tabs, tabIdx, tabWidth, activeTab) + '\n\n';
-  out += ' ' + conversationViews.labels(tabWidth, activeTab) + '\n';
-  const hint = mode === 'filter' ? 'Enter apply search · Esc clear search' : navigationHint(tabWidth, true);
-  out += ' ' + A.D + trunc(hint, tabWidth) + A.R + '\n';
-  out += A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
-
-  // Filter line
-  if (mode === 'filter' || filter) {
-    const caret = mode === 'filter' ? A.I + ' ' + A.R : '';
-    out += ' ' + A.cyn + '/' + A.R + ' ' + filter + caret + '\n';
-    out += A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
+  const width = Math.max(1, W - 2);
+  let out = frameHeader(width);
+  out += ' ' + conversationViews.labels(width, text => A.I + A.B + text + A.R) + '\n';
+  out += separator(W);
+  const searching = mode === 'filter' || filter;
+  if (searching) out += ' ' + trunc(`Search: /${filter}${mode === 'filter' ? '▏' : ''}`, width) + '\n';
+  const list = visibleItems();
+  cursor = Math.max(0, Math.min(cursor, list.length - 1));
+  const status = notice || tickError;
+  const usable = Math.max(3, H - 6 - (searching ? 1 : 0) - (status ? 1 : 0));
+  let rows;
+  if (conversationViews.index === 0) rows = sectionRows(visibleSections(), cursor, usable, width, itemRow);
+  else {
+    const start = Math.max(0, Math.min(cursor - Math.floor(usable / 2), list.length - usable));
+    rows = list.slice(start, start + usable).map((item, index) => itemRow(item, width, start + index === cursor));
+    if (!rows.length) rows.push(filter ? '(no matches — Esc clears search)' : '(no conversations in this view)');
+    while (rows.length < usable) rows.push('');
   }
-
-  // List
-  const list = visibleSessions();
-  if (cursor >= list.length) cursor = Math.max(0, list.length - 1);
-  const index = taskIndex(tasksView.data.tasks);
-
-  const headerH = (mode === 'filter' || filter) ? 10 : 8;
-  const footerH = 4;
-  const usable = Math.max(3, H - headerH - footerH);
-  const start = Math.max(0, Math.min(cursor - Math.floor(usable / 2), list.length - usable));
-  const end = Math.min(list.length, start + usable);
-
-  if (list.length === 0) {
-    let hint;
-    if (filter) {
-      hint = '(no matches — Esc clears filter)';
-    } else if (conversationViews.current.startsWith('★')) {
-      hint = '(no favorites yet — press f on any session to star it)';
-    } else if (conversationViews.current === 'Today') {
-      hint = '(no sessions today — [ / ] switch view)';
-    } else if (conversationViews.current === 'Here') {
-      hint = `(no sessions in ${CURRENT_CWD || 'this dir'} — ] to see All)`;
-    } else {
-      hint = '(no sessions in this view)';
-    }
-    out += '\n ' + A.D + hint + A.R + '\n';
-  } else {
-    for (let i = start; i < end; i++) {
-      const s = list[i];
-      const sel = i === cursor;
-      const star = s.favored ? A.yel + '★' + A.R : ' ';
-      const arrow = sel ? A.cyn + '▶' + A.R : ' ';
-      const currentJob = generationActive && generationChildren.has(s.id);
-      const queuedJob = generationActive && generationJobs.some(job => job.target.id === s.id);
-      const ts = A.gry + fmtTs(s.mtime) + A.R;
-      const cwd = A.mag + pad(shortCwd(s.effectiveCwd), 14) + A.R;
-      const badge = s.isCurrent ? A.grn + A.B + '[NOW]' + A.R + ' ' : '';
-      // Generation state and title provenance share one stable marker column.
-      const marker = currentJob
-        ? A.yel + '↻' + A.R + ' '
-        : queuedJob
-          ? A.gry + '…' + A.R + ' '
-          : s.titleOverride
-            ? A.cyn + (s.titleSource === 'llm' ? '◆' : '✎') + A.R + ' '
-            : '';
-      // Task-linked conversations show the task title before the title.
-      const chip = taskChip(s.task, index, A);
-      const titleMax = Math.max(20, W - 38 - (s.isCurrent ? 7 : 0) - (marker ? 2 : 0) - visLen(chip));
-      const title = trunc(s.title, titleMax);
-      const rowText = ` ${arrow} ${star} ${ts}  ${cwd}  ${badge}${marker}${chip}${title}`;
-      if (sel) {
-        const pad2 = ' '.repeat(Math.max(0, W - visLen(rowText) - 1));
-        out += A.bgBlu + rowText + pad2 + A.R + '\n';
-      } else {
-        out += rowText + '\n';
-      }
-    }
-  }
-
-  // Pad bottom to push footer down
-  const linesUsed = (end - start) || 1;
-  for (let i = 0; i < usable - linesUsed; i++) out += '\n';
-
-  // Footer
-  out += A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
-  out += ' ' + A.D + '↑↓' + A.R + ' move  '
-      + A.D + 'Tab' + A.R + ' tab  '
-      + A.D + 'f' + A.R + ' star  '
-      + A.D + 'x' + A.R + ' clean  '
-      + A.D + 'Enter' + A.R + ' current  '
-      + A.D + 'o' + A.R + ' original  '
-      + A.D + 'e' + A.R + ' edit name  '
-      + A.D + 't' + A.R + ' task  '
-      + A.D + 'g' + A.R + ' queue title  '
-      + A.D + 'G' + A.R + ' settings  '
-      + A.D + 'p' + A.R + ' edit cwd  '
-      + A.D + 'd' + A.R + ' details  '
-      + A.D + '/' + A.R + ' search  '
-      + A.D + 'q' + A.R + ' quit' + A.R + '\n';
-  if (notice) out += ' ' + A.cyn + notice + A.R + '\n';
-
+  out += rows.map(row => ' ' + row).join('\n') + '\n' + separator(W);
+  out += ' ' + A.D + trunc(footerText(), width) + A.R + '\n';
+  if (status) out += ' ' + A.cyn + trunc(status, width) + A.R + '\n';
   process.stdout.write(out);
+}
+
+function markResult(entry) {
+  try {
+    reviewStore.mark([entry.key]);
+    entry.reviewed = true;
+  } catch (error) { notice = `Could not mark result reviewed: ${error.message}`; }
+}
+
+function openResult(entry) {
+  notice = '';
+  markResult(entry);
+  resultOffset = 0;
+  resultLines = resultDetails(entry, Infinity);
+  mode = 'result';
+}
+
+function renderResult() {
+  const width = Math.max(1, (process.stdout.columns || 100) - 2);
+  const height = Math.max(1, (process.stdout.rows || 30) - 5 - (notice ? 1 : 0));
+  const rows = resultLines.flatMap(line => wrapRows(line, width));
+  resultOffset = Math.min(resultOffset, Math.max(0, rows.length - height));
+  process.stdout.write(frameHeader(width) + ' ' + rows.slice(resultOffset, resultOffset + height).join('\n ') +
+    '\n\n ' + trunc('↑↓ scroll · Esc back · ? keys', width) + '\n' + (notice ? ' ' + trunc(notice, width) + '\n' : ''));
+}
+
+function handleResult(key) {
+  if (['escape', 'q', 'return', 'd'].includes(key.name)) mode = 'list';
+  else if (['down', 'j', 'pagedown'].includes(key.name)) resultOffset += key.name === 'pagedown' ? 5 : 1;
+  else if (['up', 'k', 'pageup'].includes(key.name)) resultOffset = Math.max(0, resultOffset - (key.name === 'pageup' ? 5 : 1));
+  else if (key.name === 'tab') focusTab(1);
+}
+
+function startSnooze(session) {
+  if (!session || session.kind === 'tick') return;
+  if (session.remote) { notice = 'Snooze this conversation on its origin machine'; return; }
+  editTarget = session;
+  editBuffer = '';
+  editCursor = 0;
+  notice = '';
+  mode = 'snooze';
+}
+
+function saveSnooze(session, until) {
+  const entry = { ...overridesFor(session.id) };
+  if (until === undefined) delete entry.snoozedUntil;
+  else entry.snoozedUntil = until;
+  favorites.add(session.id);
+  saveFavorites(favorites);
+  const previous = meta[session.id];
+  meta[session.id] = entry;
+  try { saveMeta(); }
+  catch (error) { meta[session.id] = previous; throw error; }
+}
+
+function renderSnooze() {
+  const width = Math.max(1, (process.stdout.columns || 100) - 2);
+  const rows = [trunc(`Snooze: ${editTarget.title}`, width), '',
+    'Blank: no timer. Or use 30m, 2h, 1d, 1w.',
+    'Returns to Favorites when the timer ends.', '', `Duration: ${editBuffer}▏`, notice, '', 'Enter snooze · Esc cancel'];
+  process.stdout.write(frameHeader(width) + rows.map(row => ' ' + trunc(row, width)).join('\n') + '\n');
+}
+
+function handleSnooze(str, key) {
+  if (key.name === 'escape') { mode = 'list'; editTarget = null; notice = ''; }
+  else if (key.name === 'return') {
+    try {
+      saveSnooze(editTarget, snoozeDeadline(editBuffer));
+      notice = 'Conversation moved to Snoozed';
+      mode = 'list'; editTarget = null; cursor = 0;
+    } catch (error) { notice = error.message; }
+  } else if (key.name === 'backspace') editBuffer = editBuffer.slice(0, -1);
+  else if (key.ctrl && key.name === 'u') editBuffer = '';
+  else if (str && !key.ctrl && !key.meta && /^[0-9mhdw ]+$/i.test(str)) editBuffer += str;
 }
 
 function filteredModels() {
@@ -822,9 +850,7 @@ function renderModelPicker() {
   }
   out += '\n' + A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
   out += ' ' + A.yel + 'Sends up to 16 KB of session text; provider charges may apply.' + A.R + '\n';
-  out += ' ' + A.D + '↑↓' + A.R + ' model  ' + A.D + '←→' + A.R + ' effort  '
-      + A.D + 'type' + A.R + ' filter  ' + A.grn + A.B + 'Enter' + A.R + ' save  '
-      + A.D + 'Esc' + A.R + ' cancel\n';
+  out += ' ' + A.D + trunc('↑↓ model · ←→ effort · Enter · Esc', W - 2) + A.R + '\n';
   process.stdout.write(out);
 }
 
@@ -983,24 +1009,22 @@ function startTitleGeneration(job) {
   });
 }
 
-// Inline editor for a session's title or cwd. Renders a small focused panel
+// Inline editor for a session's title. Renders a small focused panel
 // so the user always sees which session + field they're changing.
 function renderEdit() {
   const W = process.stdout.columns || 100;
   const s = editTarget;
   let out = A.clr;
-  const label = editField === 'cwd' ? 'working directory (cwd)' : 'display title';
-  out += ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  edit ' + label + A.R + '\n\n';
+  out += ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  edit display title' + A.R + '\n\n';
   if (!s) { out += ' (no session)\n'; process.stdout.write(out); return; }
 
   const row = (k, v, color = A.R) => ` ${A.D}${pad(k, 11)}${A.R} ${color}${v}${A.R}\n`;
   out += row('id', s.id, A.cyn);
   out += row('title', s.title);
   out += row('cwd', s.effectiveCwd, A.mag);
-  if (editField === 'cwd') out += row('recorded', s.cwd, A.gry);
   out += '\n';
 
-  out += ' ' + A.B + (editField === 'cwd' ? 'New cwd' : 'New title') + ':' + A.R + '\n';
+  out += ' ' + A.B + 'New title:' + A.R + '\n';
   {
     // Render the caret in place: text before it, the inverse-highlighted char
     // under it (or a trailing inverse space at end), then the text after it.
@@ -1010,29 +1034,18 @@ function renderEdit() {
     const after = ch.slice(editCursor + 1).join('');
     out += ' ' + A.cyn + '›' + A.R + ' ' + before + A.I + under + A.R + after + '\n';
   }
-  if (editField === 'cwd') {
-    const exists = editBuffer.trim() && fs.existsSync(editBuffer.trim());
-    out += ' ' + A.D + (editBuffer.trim()
-      ? (exists ? A.grn + 'path exists' : A.yel + 'path not found (saved anyway)')
-      : 'empty → clears override, falls back to recorded cwd') + A.R + '\n';
-  } else {
-    out += ' ' + A.D + (editBuffer.trim()
-      ? 'saves a custom name for this session'
-      : 'empty → clears override, falls back to first prompt') + A.R + '\n';
-  }
+  out += ' ' + A.D + (editBuffer.trim()
+    ? 'saves a custom name for this session'
+    : 'empty → clears override, falls back to first prompt') + A.R + '\n';
 
   out += '\n' + A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
-  out += ' ' + A.D + 'Enter' + A.R + ' save  '
-      + A.D + '←→' + A.R + ' move  '
-      + A.D + 'Ctrl-U' + A.R + ' clear  '
-      + A.D + 'Esc' + A.R + ' cancel' + '\n';
+  out += ' ' + A.D + trunc('Enter save · Esc cancel', W - 2) + A.R + '\n';
   process.stdout.write(out);
 }
 
 function renderDetails() {
   const W = process.stdout.columns || 100;
-  const list = visibleSessions();
-  const s = list[cursor];
+  const s = detailsTarget;
   let out = A.clr;
   out += ' ' + A.B + A.cyn + 'pi-desk' + A.R + A.D + '  session details' + A.R + '\n\n';
   if (!s) { out += ' (no session)\n'; process.stdout.write(out); return; }
@@ -1041,6 +1054,7 @@ function renderDetails() {
   out += row('id', s.id, A.cyn);
   if (s.isCurrent) out += row('current', '● this is the attached pi session', A.grn);
   out += row('starred', s.favored ? '★ yes' : '☆ no', s.favored ? A.yel : A.gry);
+  if (isSnoozed(s)) out += row('snoozed', s.snoozedUntil ? new Date(s.snoozedUntil).toLocaleString() : 'until manually restored');
   out += row('title', s.title + (s.titleOverride ? A.cyn + `  (${s.titleSource === 'llm' ? 'generated' : 'custom'})` + A.R : ''));
   if (s.titleModel) {
     out += row('title model', s.titleModel, A.cyn);
@@ -1065,15 +1079,7 @@ function renderDetails() {
   for (const line of wrapped) out += '   ' + line + '\n';
 
   out += '\n' + A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
-  out += ' ' + A.D + 'Enter' + A.R + ' current defaults  '
-      + A.D + 'o' + A.R + ' original settings  '
-      + A.D + 'f' + A.R + ' star  '
-      + A.D + 'e' + A.R + ' edit name  '
-      + A.D + 't' + A.R + ' associate task  '
-      + A.D + 'g' + A.R + ' generate title  '
-      + A.D + 'p' + A.R + ' edit cwd  '
-      + A.D + 'c' + A.R + ' copy id  '
-      + A.D + 'Esc/d/q' + A.R + ' back' + A.R + '\n';
+  out += ' ' + A.D + trunc('Enter resume · Esc back · ? keys', W - 2) + A.R + '\n';
 
   process.stdout.write(out);
 }
@@ -1109,9 +1115,12 @@ function setupInput() {
         cancelGeneration();
         return;
       }
+      if (handleGlobalKey(str, key)) { render(); return; }
       if (tabs[tabIdx] === TASKS_TAB) {
         if (!tasksView.handle(str, key)) handleTasksNavigation(str, key);
-      } else if (mode === 'filter') handleFilter(str, key);
+      } else if (mode === 'result') handleResult(key);
+      else if (mode === 'snooze') handleSnooze(str, key);
+      else if (mode === 'filter') handleFilter(str, key);
       else if (mode === 'edit') handleEdit(str, key);
       else if (mode === 'browse') handleBrowse(str, key);
       else if (mode === 'model') handleModelPicker(str, key);
@@ -1121,7 +1130,8 @@ function setupInput() {
       render();
     } catch (e) {
       process.stdout.write(A.showC);
-      console.error('input error:', e);
+      notice = `Action failed: ${e.message}`;
+      render();
     }
   });
 
@@ -1135,14 +1145,24 @@ function setupInput() {
 }
 
 function handleTasksNavigation(str, key) {
-  if ((key.ctrl && key.name === 'c') || key.name === 'q' || key.name === 'escape') return quit();
-  const backwards = key.name === 'left' || key.name === 'h';
-  tabIdx = (tabIdx + (backwards ? tabs.length - 1 : 1)) % tabs.length;
-  cursor = 0;
+  const k = key.name;
+  if ((key.ctrl && k === 'c') || k === 'q' || k === 'escape') return quit();
+  if (k === 'tab') focusTab((tabIdx + 1) % tabs.length);
+}
+
+function toggleFavorite(session) {
+  if (session.favored) {
+    favorites.delete(session.id);
+    if (overridesFor(session.id).snoozedUntil !== undefined) {
+      delete meta[session.id].snoozedUntil;
+      saveMeta();
+    }
+  } else favorites.add(session.id);
+  saveFavorites(favorites);
 }
 
 function handleList(str, key) {
-  const list = visibleSessions();
+  const list = visibleItems();
   const k = key.name;
 
   if (key.ctrl && k === 'c') return quit();
@@ -1157,23 +1177,31 @@ function handleList(str, key) {
     return quit();
   }
   if (conversationViews.handle(str)) { cursor = 0; return; }
-  if (k === 'up' || k === 'k') cursor = Math.max(0, cursor - 1);
-  else if (k === 'down' || k === 'j') cursor = Math.min(list.length - 1, cursor + 1);
-  else if (k === 'tab' || (k === 'right' && !filter) || k === 'l') {
-    tabIdx = (tabIdx + 1) % tabs.length;
-    cursor = 0;
+  if (k === 'up' || k === 'k') { cursor = Math.max(0, cursor - 1); return; }
+  if (k === 'down' || k === 'j') { cursor = Math.min(list.length - 1, cursor + 1); return; }
+  if (k === 'tab') return focusTab((tabIdx + 1) % tabs.length);
+  if (str === '/') { mode = 'filter'; return; }
+  if (k === 'r') { sessions = scanSessions(); reloadResults(); cursor = 0; return; }
+  if (k === 'home') { cursor = 0; return; }
+  if (k === 'end') { cursor = Math.max(0, list.length - 1); return; }
+  if (k === 'pageup') { cursor = Math.max(0, cursor - 10); return; }
+  if (k === 'pagedown') { cursor = Math.min(list.length - 1, cursor + 10); return; }
+  const selected = list[cursor];
+  if (selected?.kind === 'tick') {
+    if (k === 'return' || k === 'd') openResult(selected);
+    else if (str === 'a') markResult(selected);
+    return; // Never send a tick result to conversation actions.
   }
-  else if ((k === 'left' && !filter) || k === 'h') {
-    tabIdx = (tabIdx - 1 + tabs.length) % tabs.length;
-    cursor = 0;
+  if (k === 's' && selected) {
+    if (isSnoozed(selected)) {
+      saveSnooze(selected, undefined);
+      notice = 'Conversation restored to Favorites'; cursor = 0;
+    } else startSnooze(selected);
+    return;
   }
-  else if (k === 'f' || str === ' ') {
+  if (k === 'f' || str === ' ') {
     const s = list[cursor];
-    if (s) {
-      if (s.favored) favorites.delete(s.id);
-      else favorites.add(s.id);
-      saveFavorites(favorites);
-    }
+    if (s) toggleFavorite(s);
   }
   else if (k === 'return') resumeSession(list[cursor], true);
   else if (k === 'o') resumeSession(list[cursor], false);
@@ -1181,18 +1209,12 @@ function handleList(str, key) {
     const removed = cleanStaleFavorites(sessions).length;
     notice = removed ? `removed ${removed} stale favorite${removed === 1 ? '' : 's'}` : 'no stale favorites';
   }
-  else if (k === 'd') { if (list[cursor]) mode = 'details'; }
+  else if (k === 'd' && selected) { detailsTarget = selected; mode = 'details'; }
   else if (k === 't') openTaskPicker(list[cursor]);
-  else if (k === 'e') startEdit(list[cursor], 'title');
+  else if (k === 'e') startEdit(list[cursor]);
   else if (k === 'g' && (str === 'G' || key.shift)) openGenerationSettings();
   else if (k === 'g') enqueueTitle(list[cursor]);
   else if (k === 'p') startBrowse(list[cursor]);
-  else if (str === '/') { mode = 'filter'; }
-  else if (k === 'r') { sessions = scanSessions(); cursor = 0; }
-  else if (k === 'home') cursor = 0;
-  else if (k === 'end') cursor = list.length - 1;
-  else if (k === 'pageup') cursor = Math.max(0, cursor - 10);
-  else if (k === 'pagedown') cursor = Math.min(list.length - 1, cursor + 10);
 }
 
 function handleFilter(str, key) {
@@ -1207,20 +1229,17 @@ function handleFilter(str, key) {
 
 function handleDetails(str, key) {
   const k = key.name;
-  const s = visibleSessions()[cursor];
-  if (k === 'escape' || k === 'q' || k === 'd') { mode = 'list'; return; }
+  const s = detailsTarget;
+  if (k === 'escape' || k === 'q' || k === 'd') { mode = 'list'; detailsTarget = null; return; }
   if (key.ctrl && k === 'c') return quit();
   if (k === 'return') return resumeSession(s, true);
   if (k === 'o') return resumeSession(s, false);
-  if (k === 'f' && s) {
-    if (s.favored) favorites.delete(s.id); else favorites.add(s.id);
-    saveFavorites(favorites);
-  }
+  if (k === 'f' && s) toggleFavorite(s);
   if (k === 'c' && s) {
     // Try clipboard via clip.exe (WSL) or pbcopy/xclip
     tryCopy(s.id);
   }
-  if (k === 'e' && s) startEdit(s, 'title');
+  if (k === 'e' && s) startEdit(s);
   if (k === 't' && s) openTaskPicker(s);
   if (k === 'g' && (str === 'G' || key.shift)) openGenerationSettings();
   else if (k === 'g' && s) enqueueTitle(s);
@@ -1268,14 +1287,12 @@ function handleModelPicker(str, key) {
   if (str && str.length === 1 && !key.ctrl) { modelFilter += str; modelSel = 0; }
 }
 
-// Open the inline editor for a session's title or cwd, seeded with the
-// current override (or recorded cwd, so the user can tweak rather than retype).
-function startEdit(s, field) {
+// Open the title editor, seeded with the current override.
+function startEdit(s) {
   if (!s) return;
   if (s.remote) { notice = 'Edit this conversation on its origin machine'; return; }
   editTarget = s;
-  editField = field;
-  editBuffer = field === 'cwd' ? (s.cwdOverride || s.cwd || '') : (s.titleOverride || '');
+  editBuffer = s.titleOverride || '';
   editCursor = [...editBuffer].length; // start with the caret at the end
   mode = 'edit';
 }
@@ -1285,10 +1302,7 @@ function handleEdit(str, key) {
   if (key.ctrl && k === 'c') return quit();
   if (k === 'escape') { mode = 'list'; editTarget = null; return; }
   if (k === 'return') {
-    if (editTarget) {
-      if (editField === 'title') saveTitle(editTarget.id, editBuffer, 'manual');
-      else setOverride(editTarget.id, editField, editBuffer);
-    }
+    if (editTarget) saveTitle(editTarget.id, editBuffer, 'manual');
     mode = 'list';
     editTarget = null;
     return;
@@ -1360,7 +1374,6 @@ function startBrowse(s) {
   if (!s) return;
   if (s.remote) { notice = 'Edit this conversation on its origin machine'; return; }
   editTarget = s;
-  editField = 'cwd';
   buildBrowse(s.cwdOverride || s.cwd || CURRENT_CWD || '/');
   mode = 'browse';
 }
@@ -1433,11 +1446,7 @@ function renderBrowse() {
   for (let i = 0; i < usable - linesUsed; i++) out += '\n';
 
   out += A.gry + '─'.repeat(Math.max(1, W - 1)) + A.R + '\n';
-  out += ' ' + A.D + '↑↓' + A.R + ' move  '
-      + A.D + '→/Enter' + A.R + ' open dir  '
-      + A.D + '←' + A.R + ' parent  '
-      + A.grn + A.B + 's' + A.R + A.D + ' SELECT this dir  '
-      + A.D + 'Esc' + A.R + ' cancel' + A.R + '\n';
+  out += ' ' + A.D + trunc('Enter open · s select · Esc cancel', W - 2) + A.R + '\n';
   process.stdout.write(out);
 }
 
@@ -1765,26 +1774,10 @@ Usage:
   pi-desk --help, -h      This help
 
 TUI keys:
-  ↑↓ / j k         move cursor
-  Tab / h l        switch tab  (Conversations ↔ Tasks)
-  [ / ]            switch view within Conversations (★ Favorites / Today / Here / All)
-  Tasks tab        Space complete/reopen, n add, e edit, l list, s status, / search, r reload
-  c (Tasks tab)    start a conversation linked to the selected task
-  t                associate the conversation with a task (Enter applies, Esc cancels)
-  f / Space        toggle favorite
-  x                remove favorites whose sessions no longer exist
-  Enter            resume with current default model and thinking settings
-  o                resume with the session-recorded model and thinking settings
-  e                edit name (custom display title)
-  g                queue title generation with the saved model + effort
-                   (first use opens settings; active/queued threads are ignored)
-  G                open title generation model + effort settings
-  p                edit cwd — arrow-key directory browser
-                   (↑↓ move, →/Enter open dir, ← parent, s select, Esc cancel)
-                   sets the working directory used on resume / "Here" tab
-  d                show details
-  /                search (id / project / prompt / title)
-  r                rescan session files
+${SECTIONS.filter(([title]) => title !== 'Files').map(([title, entries]) =>
+  `  ${title}\n${entries.map(([keys, meaning]) => `    ${keys.padEnd(16)} ${meaning}`).join('\n')}`
+).join('\n\n')}
+
   q / Esc          cancel generation / clear search first; press again to quit
   Ctrl-C           cancel generation and quit immediately
 
@@ -1796,6 +1789,8 @@ Files:
   Favorites: ${FAV_FILE}
   Overrides: ${META_FILE}
   Task links: ${TASK_LINKS_FILE}
+  Tick runs: ${process.env.PI_TICK_DATA_DIR || '~/.pi/agent/tick'}/runs.jsonl
+  Reviewed : ${reviewStore.file}
   Sessions : ${SESSIONS_ROOT}/<project>/<ts>_<uuid>.jsonl`);
 }
 
@@ -1848,15 +1843,18 @@ function main() {
   }
 
   sessions = scanSessions();
-  if (sessions.length === 0) tabIdx = tabs.indexOf(TASKS_TAB);
+  reloadResults();
   setupInput();
+  uiReady = true;
   render();
   // Refresh external CLI changes and reference snapshots without resetting an edit.
   setInterval(() => {
     if (handingOff || mode !== 'list') return;
-    const selected = visibleSessions()[cursor]?.id;
+    const current = visibleItems()[cursor];
+    const selected = current?.key || current?.id;
     sessions = scanSessions();
-    const index = visibleSessions().findIndex(s => s.id === selected);
+    reloadResults();
+    const index = visibleItems().findIndex(item => (item.key || item.id) === selected);
     cursor = Math.max(0, index);
     if (tabs[tabIdx] === TASKS_TAB && !tasksView.picker && !tasksView.actions.form && !tasksView.actions.saving && tasksView.mode !== 'search') void tasksView.reload(true);
     render();

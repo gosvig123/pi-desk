@@ -64,12 +64,12 @@ class TaskForm {
     fields.push(`${this.index === FIELDS.length ? '▶' : ' '} [ Save changes ]`);
     if (height < 5 && this.index < FIELDS.length) return [
       this.error ? `! ${this.error}` : LABELS[this.index],
-      viewport(this.values[FIELDS[this.index]], this.positions[FIELDS[this.index]], width),
-      'Ctrl-S save · Esc cancel'].slice(-height).map(row => clip(row, width));
+      viewport(this.values[FIELDS[this.index]], this.positions[FIELDS[this.index]], width)
+    ].slice(-height).map(row => clip(row, width));
     const focus = this.index * 3;
-    const available = Math.max(1, height - 2);
+    const available = Math.max(1, height - 1);
     const start = Math.max(0, Math.min(focus, fields.length - available));
-    return [title, ...fields.slice(start, start + available), 'Ctrl-S save · Esc cancel'].slice(-height)
+    return [title, ...fields.slice(start, start + available)].slice(-height)
       .map(row => clip(row, width));
   }
 

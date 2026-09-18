@@ -157,9 +157,8 @@ class TasksView {
     if (this.picker) return this.picker.lines(height).map(row => clip(row, width));
     if (this.actions.form) return this.actions.lines(height, width).slice(-height).map(row => clip(row, width));
     const list = safeText(this.data.lists[this.listIndex - 1] ?? ALL_LISTS);
-    const rows = [...this.actions.lines(), `List: ${list} · ${TASK_STATUSES[this.statusIndex].label}`,
-      taskSummary(this),
-      this.query || this.mode === SEARCH ? `Search: /${this.query}${this.mode === SEARCH ? '▏' : ''}` : '/ search · l lists · s status'];
+    const rows = [...this.actions.lines(), `List: ${list} · ${TASK_STATUSES[this.statusIndex].label}`, taskSummary(this)];
+    if (this.query || this.mode === SEARCH) rows.push(`Search: /${this.query}${this.mode === SEARCH ? '▏' : ''}`);
     if (this.loading) rows.push('Loading tasks…');
     if (this.data.errors.length) rows.push(`Error: ${this.data.errors.join('; ')} — r retries`);
     const available = Math.max(1, height - rows.length);
@@ -186,14 +185,12 @@ class TasksView {
     return rows.slice(this.detailOffset, this.detailOffset + height);
   }
 
-  help(width = 78) {
+  help() {
     if (this.actions.form) return this.actions.help();
-    if (this.picker) return 'Type list name · ↑↓ select · Enter apply · Esc cancel · Tab tabs';
-    if (this.mode === SEARCH) return 'Type search · Enter apply · Esc clear · Ctrl-U clear';
-    if (width < 60) return this.mode === DETAILS ? '↑↓ scroll · e edit · c conversation · Esc back' : '↑↓ move · Enter info · Space toggle';
-    if (this.mode === DETAILS) return '↑↓ scroll · e edit · Space toggle · c conversation · Esc back';
-    if (this.boardActive || width < 100) return 'Enter info · Space toggle · e edit · n add · c conversation · s status · r reload';
-    return `↑↓ move · Enter details · Space toggle · e edit · n add · l lists · ${START_CONVERSATION} conversation · ${NEXT_STATUS} status · / search · r reload · q quit`;
+    if (this.picker) return '↑↓ select · Enter apply · Esc cancel';
+    if (this.mode === SEARCH) return 'Type search · Enter apply · Esc clear';
+    if (this.mode === DETAILS) return 'e edit · Esc back · ? keys';
+    return 'Enter details · Space toggle · ? keys';
   }
 }
 

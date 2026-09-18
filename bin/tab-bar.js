@@ -1,6 +1,7 @@
 'use strict';
 
-// These fixed tab labels use one terminal cell per character.
+// The active tab stays whole, so the numbered jump key is always readable even
+// when the other four labels do not fit.
 function tabBar(labels, selected, width, active = text => text) {
   const cells = labels.map((label, index) => index === selected ? `[ ${label} ]` : `  ${label}  `);
   for (const separator of ['   │   ', ' │ ']) {
@@ -13,10 +14,4 @@ function tabBar(labels, selected, width, active = text => text) {
   return active(clipped);
 }
 
-function navigationHint(width, conversations) {
-  if (!conversations) return 'Tab switch tab';
-  const full = 'Tab switch tab · [ previous view · ] next view';
-  return width >= full.length ? full : 'Tab tabs · [ prev view · ] next view';
-}
-
-module.exports = { tabBar, navigationHint };
+module.exports = { tabBar };

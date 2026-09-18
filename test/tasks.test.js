@@ -44,7 +44,7 @@ test('TasksView cycles status and preserves list and search on reload', async ()
   const view = new TasksView(() => {}, async () => fixture);
   await view.reload();
   assert.match(view.lines(20).join('\n'), /· All/);
-  assert.match(view.help(), /s status/);
+  assert.match(view.help(), /\? keys/);
   key(view, ']'); key(view, ']');
   view.query = 'query'; view.cursor = 1;
   assert.equal(key(view, 's'), true);

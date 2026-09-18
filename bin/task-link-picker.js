@@ -55,7 +55,7 @@ class TaskLinkPicker {
     lines.push(A.gry + '─'.repeat(Math.max(1, width - 1)) + A.R);
     lines.push(...this.rows(width - 1, Math.max(3, height - lines.length - 3)));
     lines.push(A.gry + '─'.repeat(Math.max(1, width - 1)) + A.R);
-    lines.push(' ' + A.D + clip('↑↓ move · type filter · Enter apply · Esc cancel', Math.max(1, width - 2)) + A.R);
+    lines.push(' ' + A.D + clip('↑↓ select · Enter apply · Esc cancel', Math.max(1, width - 2)) + A.R);
     return lines.join('\n') + '\n';
   }
 

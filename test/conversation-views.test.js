@@ -28,11 +28,13 @@ test('one Conversations tab switches existing views without merging or mutating 
   assert.equal(sessions.length, 3);
 });
 
-test('picker connects two top-level tabs and keeps view switching separate from search', () => {
+test('picker puts every destination on one navigation row and keeps view switching separate from search', () => {
   const source = fs.readFileSync(path.join(__dirname, '../bin/pisesh'), 'utf8');
   assert.match(source, /const tabs = \[CONVERSATIONS_TAB, TASKS_TAB\]/);
   assert.match(source, /conversationViews\.filter\(sessions, CURRENT_CWD\)/);
   assert.match(source, /conversationViews\.handle\(str\)/);
   assert.match(source, /mode === 'filter'\) handleFilter\(str, key\)/);
-  assert.match(source, /conversationViews\.labels\(tabWidth, activeTab\)/);
+  assert.match(source, /conversationViews\.labels\(width, /);
+  assert.match(source, /tabBar\(labels, tabIdx, width, /);
+  assert.doesNotMatch(source, /navigationHint|CONVERSATION_MODES/);
 });

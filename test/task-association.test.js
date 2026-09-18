@@ -16,9 +16,9 @@ test('both tabs are wired to the task link, and the entrypoint stays thin', () =
   assert.match(source, /applyTaskLinkChoice\(setTaskLink, linkPicker\.session\.id, result/);
   assert.match(source, /startConversation: startTaskConversation, linkedConversations: taskId => conversationsForTask\(sessions, taskId\)/);
   assert.match(source, /\.\.\.taskConversationEnv\(task\)/);
-  assert.match(source, /const chip = taskChip\(s\.task, index, A\)/);
+  // Task metadata stays in details and search; list rows put the title first.
   assert.match(source, /taskDetailRows\(s\.task, taskIndex\(tasksView\.data\.tasks\), A, W\)/);
-  assert.match(source, /taskSearchText\(s\.task, index\)\.includes\(q\)/);
+  assert.match(source, /taskSearchText\(item\.task, index\)/);
   // The picker screen, the picker model, the storage, and the launch contract
   // live in their own modules.
   for (const module of ['task-links', 'task-link-meta', 'task-link-picker', 'task-picker', 'task-conversation', 'picker-run']) {
