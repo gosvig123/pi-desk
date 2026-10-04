@@ -122,6 +122,10 @@ with `r`. Job enable/disable/run controls remain in pi-tick, not pi-desk.
 Review marks live in `~/.pi/agent/pisesh-review.json`; the newest 2000 keys are
 kept for 90 days. Reviewing never changes transcripts or tick jobs.
 
+Pi's footer shows the count of new results, for example
+`◆ 3 tick results to review · 1 failed · /desk`, in every interactive session.
+It checks every 30 seconds and disappears when everything is reviewed.
+
 ## Cross-machine sync
 
 The separately configured background service checks tasks, conversation

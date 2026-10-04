@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - `1`-`4` jump to a tab, `T` and `R` jump to Ticks and Review, and notices render once instead of staying in the header.
 
 ### Added
+- Show the count of new Tick results, and how many failed, in Pi's footer.
 - Background task sync without retention, with unchanged-data probes and bounded retry backoff.
 - Bounded SSH conversation references, origin/stale indicators, manual continuation, and `/desk sync` status.
 - Add a Review view inside the Conversations tab: `R` switches to it, `Enter` opens an entry, `d` opens details, `a` marks one reviewed, and `A` marks all listed reviewed. It lists conversations whose last message is an assistant reply plus finished tick runs with their output, newest first, limited to the last 14 days. Acknowledgements are stored in `~/.pi/agent/pisesh-review.json`, and the first run starts empty.

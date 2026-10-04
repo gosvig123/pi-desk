@@ -43,7 +43,8 @@
   "pi": {
     "extensions": [
       "./extensions/sesh.ts",
-      "./extensions/task-panel.ts"
+      "./extensions/task-panel.ts",
+      "./extensions/review-status.ts"
     ],
     "image": "https://raw.githubusercontent.com/Blue-B/pisesh/main/assets/preview.png"
   },
