@@ -42,7 +42,8 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/sesh.ts"
+      "./extensions/sesh.ts",
+      "./extensions/task-panel.ts"
     ],
     "image": "https://raw.githubusercontent.com/Blue-B/pisesh/main/assets/preview.png"
   },
