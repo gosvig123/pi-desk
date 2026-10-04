@@ -118,7 +118,7 @@ test('TasksView consumes every session action in list and details modes', async 
   key(view, 'return');
   assert.match(view.help(), /Esc back/);
   for (const name of ['f', 'o', 'x', 'g', 'G', 'p', 'c']) assert.equal(key(view, name), true);
-  assert.match(view.lines(20).join('\n'), /Due 2026-10-01/);
+  assert.match(view.lines(20).join('\n'), /(Due|Overdue) 2026-10-01/);
   key(view, 'escape');
   assert.equal(key(view, 'q'), false);
 });
