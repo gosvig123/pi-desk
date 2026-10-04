@@ -13,6 +13,7 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const readline = require('readline');
+const { StringDecoder } = require('string_decoder');
 const { TASKS_TAB, loadTasks } = require('./tasks-data');
 const { remoteConversations } = require('./remote-conversations');
 const { TasksView } = require('./tasks-view');
@@ -220,41 +221,52 @@ function shortCwd(cwd, max = 18) {
 }
 
 // ── Scan sessions ─────────────────────────────────────
-function readSessionMeta(file) {
-  // Read up to 96 KB to find session line + first user prompt
-  let buf;
+function* sessionLines(file) {
+  const fd = fs.openSync(file, 'r');
   try {
-    const fd = fs.openSync(file, 'r');
-    const tmp = Buffer.alloc(96 * 1024);
-    const n = fs.readSync(fd, tmp, 0, tmp.length, 0);
+    const buffer = Buffer.alloc(96 * 1024);
+    const decoder = new StringDecoder('utf8');
+    let pending = '';
+    let n;
+    while ((n = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      const lines = (pending + decoder.write(buffer.subarray(0, n))).split('\n');
+      pending = lines.pop();
+      yield* lines;
+    }
+    yield pending + decoder.end();
+  } finally {
     fs.closeSync(fd);
-    buf = tmp.slice(0, n).toString('utf8');
-  } catch { return null; }
+  }
+}
 
-  const lines = buf.split('\n');
+function readSessionMeta(file) {
+  // System entries can exceed 96 KB. Read complete lines until the first prompt,
+  // then close the file without scanning the rest of the conversation.
   let session = null;
   let firstPrompt = '';
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    let obj;
-    try { obj = JSON.parse(line); }
-    catch { continue; } // truncated last line is fine
+  try {
+    for (const line of sessionLines(file)) {
+      if (!line.trim()) continue;
+      let obj;
+      try { obj = JSON.parse(line); }
+      catch { continue; } // truncated last line is fine
 
-    if (!session && obj.type === 'session') session = obj;
+      if (!session && obj.type === 'session') session = obj;
 
-    if (!firstPrompt && obj.type === 'message' && obj.message && obj.message.role === 'user') {
-      const content = obj.message.content;
-      let text = '';
-      if (Array.isArray(content)) {
-        for (const c of content) {
-          if (c && c.type === 'text' && c.text) { text = c.text; break; }
-        }
-      } else if (typeof content === 'string') text = content;
-      if (text.trim()) firstPrompt = text.trim();
+      if (!firstPrompt && obj.type === 'message' && obj.message && obj.message.role === 'user') {
+        const content = obj.message.content;
+        let text = '';
+        if (Array.isArray(content)) {
+          for (const c of content) {
+            if (c && c.type === 'text' && c.text) { text = c.text; break; }
+          }
+        } else if (typeof content === 'string') text = content;
+        if (text.trim()) firstPrompt = text.trim();
+      }
+
+      if (session && firstPrompt) break;
     }
-
-    if (session && firstPrompt) break;
-  }
+  } catch { return null; }
   if (!session) return null;
   session.firstPrompt = firstPrompt;
   return session;
