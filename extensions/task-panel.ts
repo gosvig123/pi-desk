@@ -39,7 +39,7 @@ let listTimer: NodeJS.Timeout | undefined;
 
 function stack() {
 	const shared = (globalThis as Record<symbol, unknown>)[STACK_KEY] as Stack | undefined;
-	if (!shared) throw new Error("shared right column is not loaded; enable ~/.pi/agent/extensions/right-column.ts");
+	if (!shared) throw new Error("shared right column is not loaded; install pi-agent-kit (git:github.com/gosvig123/pi-agent-kit), which provides extensions/right-column.ts");
 	return shared;
 }
 
