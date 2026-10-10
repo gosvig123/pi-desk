@@ -15,6 +15,7 @@ const {
   titleGenerationArgs,
   titleGenerationBlocker,
 } = require('../bin/pisesh');
+const { hasTitle, saveFirstTitle, titleSettings } = require('../bin/session-titles');
 
 test('parses canonical model ids from pi --list-models', () => {
   const output = [
@@ -61,19 +62,29 @@ test('protects manually edited titles from generated replacement', () => {
   assert.equal(titleGenerationBlocker({}), '');
 });
 
-test('cleans and validates generated title and subtitle output', () => {
+test('cleans and validates generated title output', () => {
+  assert.equal(cleanGeneratedTitle('Title: “Auto Name Desk Sessions With LLM”\n'), 'Auto Name Desk Sessions With LLM');
   assert.equal(
-    cleanGeneratedTitle('Title: “Improve Title Generation: Add a complementary summary without repeating the main task.”\n'),
-    'Improve Title Generation: Add a complementary summary without repeating the main task.',
-  );
-  assert.equal(
-    cleanGeneratedTitle("\u001b[31m'Fix CJK Layout: Correct display widths in the session list.'\u001b[0m"),
-    'Fix CJK Layout: Correct display widths in the session list.',
+    cleanGeneratedTitle("\u001b[31m'Fix CJK Layout in Session List.'\u001b[0m"),
+    'Fix CJK Layout in Session List',
   );
   assert.throws(() => cleanGeneratedTitle('\n\n'), /exactly one line/);
-  assert.throws(() => cleanGeneratedTitle('warning\nFix CJK Layout: Correct the list.'), /exactly one line/);
-  assert.throws(() => cleanGeneratedTitle('Fix CJK Layout without a subtitle'), /separated by a colon/);
-  assert.throws(() => cleanGeneratedTitle('Fix CJK: Preserve layout: Avoid wrapping'), /separated by a colon/);
+  assert.throws(() => cleanGeneratedTitle('warning\nFix CJK Layout'), /exactly one line/);
+  assert.throws(() => cleanGeneratedTitle('""'), /empty title/);
+});
+
+test('protects existing titles from automatic replacement', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pisesh-meta-'));
+  const file = path.join(dir, 'pisesh-meta.json');
+  const settings = { model: 'openai-codex/gpt-5.6-luna', effort: 'off' };
+  fs.writeFileSync(file, JSON.stringify({ overrides: { kept: { title: 'My name', titleSource: 'manual' }, other: { cwd: '/x' } } }));
+  assert.equal(saveFirstTitle('kept', 'Generated', settings, file), false);
+  assert.equal(saveFirstTitle('other', 'Generated', settings, file), true);
+  const { overrides } = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(overrides.kept.title, 'My name');
+  assert.deepEqual(overrides.other, { cwd: '/x', title: 'Generated', titleSource: 'llm', titleModel: settings.model, titleThinkingLevel: 'off' });
+  assert.equal(hasTitle('other', file), true);
+  assert.deepEqual(titleSettings({}), settings);
 });
 
 test('builds role-aware title context and excludes plans and tool results', () => {
@@ -97,5 +108,5 @@ test('builds role-aware title context and excludes plans and tool results', () =
   assert.doesNotMatch(prompt, /I will inspect the implementation/);
   assert.doesNotMatch(prompt, /SECRET TOOL OUTPUT/);
   assert.doesNotMatch(prompt, /PARTIAL ABORTED RESPONSE/);
-  assert.match(prompt, /Output exactly one line:\n<3-8 word title>: <6-14 word subtitle>/);
+  assert.match(prompt, /^Generate a concise 3-7 word title/);
 });

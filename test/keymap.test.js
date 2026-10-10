@@ -78,9 +78,9 @@ test('picker renders three sections, persists snoozes and review marks, and keep
     handleList('s', { name: 's' });
     assert.equal(visibleSections()[0].items[0].id, 'focus');
     startSnooze(sessions[0]); handleSnooze('', { name: 'return' });
-    meta = loadMeta().overrides; sessions = scanSessions();
+    sessions = scanSessions();
     assert.equal(visibleSections()[1].items[0].snoozedUntil, null);
-    meta.focus.snoozedUntil = new Date(Date.now() - 1).toISOString(); saveMeta();
+    meta.focus.snoozedUntil = new Date(Date.now() - 1).toISOString(); saveMeta('focus');
     assert.equal(visibleSections()[0].items[0].id, 'focus');
     assert.equal(visibleSections()[1].items.length, 0);
     cursor = visibleItems().findIndex(item => item.runId === 'one');

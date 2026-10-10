@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file.
 - `1`-`4` jump to a tab, `T` and `R` jump to Ticks and Review, and notices render once instead of staying in the header.
 
 ### Added
+- Title conversations automatically, like Zed threads: after a turn ends in a session with no Desk title, a background `pi --print` call generates a 3-7 word title and saves it in `pisesh-meta.json` as a generated title. Session files stay unchanged, manual titles always win, and a failure warns once and retries after the next turn. The default title model is `openai-codex/gpt-5.6-luna`, Zed's thread summary model.
+- `c` on a Tick result continues the run as a conversation. The run's transcript becomes a Pi session in the job's directory, with the transcript as its parent session; pressing `c` again reopens the same conversation.
 - Show the count of new Tick results, and how many failed, in Pi's footer.
 - Background task sync without retention, with unchanged-data probes and bounded retry backoff.
 - Bounded SSH conversation references, origin/stale indicators, manual continuation, and `/desk sync` status.
@@ -20,6 +22,7 @@ All notable changes to this project will be documented in this file.
 - Show task-linked conversations in task details and the task title on the conversation row, search, and details, resolved from the loaded task by stable ID.
 
 ### Fixed
+- Merge `pisesh-meta.json` per session on save, so the picker no longer erases titles that running pi sessions wrote meanwhile.
 - Report a failed task-link save as `task link not saved: <cause>` instead of showing success.
 - Lock and atomically replace the task-link file so concurrent pi-desk processes never lose a link. A lock held by a paused or crashed process is never stolen; the write fails with the lock path so a person can remove it.
 - Block writes to an unreadable or damaged task-link file instead of erasing the links it holds.

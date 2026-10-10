@@ -66,6 +66,14 @@ the picker leaves the current session running. Reload or session replacement
 cancels a queued switch. Custom working directory overrides require a compatible
 Pi version.
 
+Conversations get a generated 3-7 word title automatically, the way Zed titles
+agent threads: when a turn ends in an interactive or RPC session that has no Desk
+title yet, pi-desk asks the title model in the background and saves the result in
+`pisesh-meta.json`. The session file is not changed. A failed attempt shows one
+warning and retries after the next turn. A manual title (`e`) always wins, and `g`
+regenerates on request. Print runs and subagent children are not titled. The default
+model is `openai-codex/gpt-5.6-luna` with thinking off; `G` saves another one.
+
 Title generation sends up to 16 KB of session text to the selected model provider
 and may incur charges. It excludes tool results and disables tools, context files,
 skills, and prompt templates for the generation call.
@@ -111,6 +119,11 @@ marks are reused; unmarked results start as new, including on first use.
 
 - `Enter` / `d` opens the output and marks that run reviewed.
 - `a` marks the selected run reviewed without opening it.
+- `c`, in the list or the output, continues the run as a conversation. pi-desk
+  copies the run's messages from its transcript into a Pi session in the job's
+  directory, then resumes it, so you can reply with the run's full context.
+  Pressing `c` again on the same run reopens that conversation. Remote results
+  must be continued on their origin machine.
 - `↑` / `↓` scrolls output; `Esc` returns to the list.
 - Reviewed results stay visible. Conversation favorites do not have review badges.
 

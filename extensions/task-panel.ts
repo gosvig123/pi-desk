@@ -1,5 +1,5 @@
 /**
- * Floating task panel in the shared right column (next to Git changes).
+ * Floating task panel in the shared right column.
  *
  * Hidden by default. ctrl+alt+t shows and focuses it; Esc at list level gives
  * keys back to the editor and keeps the panel open; q or /desk-panel hides it.
@@ -39,7 +39,7 @@ let listTimer: NodeJS.Timeout | undefined;
 
 function stack() {
 	const shared = (globalThis as Record<symbol, unknown>)[STACK_KEY] as Stack | undefined;
-	if (!shared) throw new Error("shared right column is not loaded; enable the git-status-widget extension");
+	if (!shared) throw new Error("shared right column is not loaded; enable ~/.pi/agent/extensions/right-column.ts");
 	return shared;
 }
 

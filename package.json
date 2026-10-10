@@ -44,7 +44,8 @@
     "extensions": [
       "./extensions/sesh.ts",
       "./extensions/task-panel.ts",
-      "./extensions/review-status.ts"
+      "./extensions/review-status.ts",
+      "./extensions/session-titles.ts"
     ],
     "image": "https://raw.githubusercontent.com/Blue-B/pisesh/main/assets/preview.png"
   },

@@ -20,6 +20,7 @@ const { TasksView } = require('./tasks-view');
 const { CONVERSATIONS_TAB, ConversationViews } = require('./conversation-views');
 const { ReviewStore } = require('./review-store');
 const { loadTickResults, resultRow, resultDetails } = require('./tick-results');
+const { continueTickRun } = require('./tick-conversation');
 const { isSnoozed, snoozeDeadline, favoriteSections, sectionRows } = require('./favorite-sections');
 const { tabBar } = require('./tab-bar');
 const { SECTIONS, keymapLines } = require('./keymap');
@@ -28,6 +29,11 @@ const { taskLinksFile, readTaskLinks, writeTaskLink } = require('./task-links');
 const { taskIndex, taskSearchText, taskDetailRows, conversationsForTask } = require('./task-link-meta');
 const { TaskLinkPicker, applyTaskLinkChoice } = require('./task-link-picker');
 const { buildNewConversation, taskConversationEnv } = require('./task-conversation');
+const { readMeta, updateMeta } = require('./session-meta');
+const {
+  titleSettings, buildTitlePrompt, cleanGeneratedTitle,
+  titleGenerationArgs, spawnTitleChild, titleGenerationBlocker,
+} = require('./session-titles');
 
 // ── Paths ─────────────────────────────────────────────
 const HOME = os.homedir();
@@ -114,30 +120,21 @@ let favorites = loadFavorites();
 
 // ── Per-session overrides (title / cwd) ───────────────────
 // Session jsonl files are treated as read-only history, so user edits to a
-// session's display title or resume cwd live in a sidecar file keyed by id:
-//   { overrides: { "<id>": { title?: string, cwd?: string } }, updated }
-function loadMeta() {
-  try {
-    const data = JSON.parse(fs.readFileSync(META_FILE, 'utf8'));
-    return {
-      overrides: (data && typeof data.overrides === 'object' && data.overrides) || {},
-      settings: (data && typeof data.settings === 'object' && data.settings) || {},
-    };
-  } catch { return { overrides: {}, settings: {} }; }
+// session's display title or resume cwd live in a sidecar file keyed by id
+// (see bin/session-meta.js). Running pi sessions also write generated titles
+// there, so each save merges only the picker's settings and the one session
+// it changed, then adopts the file's newer entries for other sessions.
+function saveMeta(id) {
+  const written = updateMeta(data => {
+    data.settings = metaSettings;
+    if (!id) return;
+    if (meta[id]) data.overrides[id] = meta[id];
+    else delete data.overrides[id];
+  }, META_FILE);
+  meta = written.overrides;
 }
 
-function saveMeta() {
-  const data = { settings: metaSettings, overrides: meta, updated: new Date().toISOString() };
-  try {
-    fs.mkdirSync(path.dirname(META_FILE), { recursive: true });
-    fs.writeFileSync(`${META_FILE}.tmp`, JSON.stringify(data, null, 2));
-    fs.renameSync(`${META_FILE}.tmp`, META_FILE);
-  } catch (e) {
-    throw new Error(`save meta failed: ${e.message}`);
-  }
-}
-
-const loadedMeta = loadMeta();
+const loadedMeta = readMeta(META_FILE);
 let meta = loadedMeta.overrides;
 let metaSettings = loadedMeta.settings;
 
@@ -157,7 +154,7 @@ function setOverride(id, field, value) {
   else delete entry[field];
   if (Object.keys(entry).length) meta[id] = entry;
   else delete meta[id];
-  saveMeta();
+  saveMeta(id);
 }
 
 function saveTitle(id, value, source, model, thinkingLevel) {
@@ -182,7 +179,7 @@ function saveTitle(id, value, source, model, thinkingLevel) {
   }
   if (Object.keys(entry).length) meta[id] = entry;
   else delete meta[id];
-  saveMeta();
+  saveMeta(id);
 }
 
 // ── Conversation → task links ──────────────────────
@@ -273,6 +270,8 @@ function readSessionMeta(file) {
 }
 
 function scanSessions() {
+  // Pick up titles that running pi sessions generated since the last scan.
+  meta = readMeta(META_FILE).overrides;
   let rootEntries;
   try { rootEntries = fs.readdirSync(SESSIONS_ROOT, { withFileTypes: true }); }
   catch { rootEntries = []; }
@@ -365,6 +364,7 @@ let tickResults = [];
 let tickError = '';
 let resultOffset = 0;
 let resultLines = [];
+let resultEntry = null;
 let tabIdx = 0;
 let cursor = 0;
 let detailsTarget = null;
@@ -421,148 +421,6 @@ function parseModelEntries(output) {
 
 function parseModelList(output) {
   return parseModelEntries(output).map(entry => entry.id);
-}
-
-function textFromContent(content) {
-  if (typeof content === 'string') return content.trim();
-  if (!Array.isArray(content)) return '';
-  return content.filter(x => x && x.type === 'text' && x.text).map(x => x.text.trim()).filter(Boolean).join('\n');
-}
-
-const TITLE_PROMPT = `Generate a durable, factual topic label for this coding session.
-Describe what the session is about, not what the assistant completed or reported.
-Do not summarize or quote the conversation.
-
-Output exactly one line:
-<3-8 word title>: <6-14 word subtitle>
-
-Title requirements (highest priority):
-- The title must stand alone because the subtitle may be truncated in the session list
-- Use a base-form action such as Review, Rebase, Refactor, Resolve, Fix, Add, Remove, or Investigate
-- Put the core subject, action, exact target, and distinguishing scope in the title
-- Name human-readable identifiers whenever available: PR number or name, branch, class, function, filename, package, command, or issue
-- Describe the central task or topic independent of its progress or completion state
-- Never encode status or bookkeeping such as completed, done, finished, committed, updated, tests passed, or test counts
-- Use factual, impersonal wording; never use I, we, you, I'll, I will, let's, or going to
-- Never describe the assistant's plan, promise, tool usage, response, next step, or accomplishments
-- Never copy a sentence from the conversation
-- Omit commit hashes; unlike PR numbers, they are not useful human-readable identifiers
-- When referring to a path, prefer the filename alone; include directories only when needed to disambiguate
-- Count every slash-separated path component as one word toward the 3-8 word limit (for example, src/auth/Login.ts counts as three words)
-- Prefer specific technical nouns over generic descriptions
-
-Subtitle requirements:
-- Use 6-14 words in one concise, factual imperative sentence
-- Begin with a base-form action verb such as Add, Apply, Check, Extract, Implement, Inspect, Preserve, or Remove
-- Use parallel imperative verb phrases when naming multiple actions
-- Describe technical scope, constraints, or subject matter not already in the title
-- Avoid report-style verbs such as covers, adds, identifies, resolves, or completed
-- Do not report progress, completion, commit history, todo updates, or test counts unless testing is the session's central topic
-- Use assistant evidence only to clarify the topic, target, and scope; ignore its status and process wording
-- Do not repeat or rephrase the title
-
-Examples:
-Resolve sample-service Audit Findings: Apply focused refactors, tighten authorization, and bound cache growth.
-Review desktop-client Concurrency Changes: Check lifecycle, thread safety, and event ownership.
-Review PR #42 Token Refresh: Inspect refresh concurrency and add regression coverage.
-Rebase feature/auth onto main: Resolve middleware conflicts and preserve session handling compatibility.
-Refactor SessionManager Retry Logic: Extract backoff policy and remove duplicated state transitions.
-
-General requirements:
-- Use exactly one colon to separate the title and subtitle
-- No quotation marks
-- Output only the title and subtitle`;
-
-function boundTitleContext(text, maxChars) {
-  if (text.length <= maxChars) return text;
-  const marker = '\n\n[earlier context omitted]\n\n';
-  if (maxChars <= marker.length) return text.slice(0, maxChars);
-  const available = maxChars - marker.length;
-  const head = Math.floor(available * 0.4);
-  return text.slice(0, head) + marker + text.slice(-(available - head));
-}
-
-function buildTitlePrompt(file, maxChars = 16000) {
-  const userRequests = [];
-  const assistantReports = [];
-  let sessionCwd = '';
-  try {
-    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-      if (!line.trim()) continue;
-      let obj;
-      try { obj = JSON.parse(line); } catch { continue; }
-      if (obj.type === 'session' && !sessionCwd && typeof obj.cwd === 'string') {
-        sessionCwd = obj.cwd.trim();
-        continue;
-      }
-      if (obj.type !== 'message' || !obj.message) continue;
-      const { role, content, stopReason } = obj.message;
-      if (role !== 'user' && role !== 'assistant') continue;
-      const text = textFromContent(content);
-      if (!text) continue;
-      if (role === 'user') {
-        userRequests.push(`User request ${userRequests.length + 1}: ${text}`);
-        continue;
-      }
-      const hasToolCall = Array.isArray(content) && content.some(x => x && x.type === 'toolCall');
-      if (!hasToolCall && stopReason !== 'error' && stopReason !== 'aborted') {
-        assistantReports.push(`Assistant evidence ${assistantReports.length + 1}: ${text}`);
-      }
-    }
-  } catch (e) { throw new Error(`could not read session: ${e.message}`); }
-  if (!userRequests.length && !assistantReports.length) throw new Error('no conversation text found');
-
-  const userText = userRequests.join('\n\n');
-  const assistantText = assistantReports.join('\n\n');
-  const totalBudget = Math.max(0, maxChars);
-  let userBudget = Math.min(userText.length, Math.floor(totalBudget * 0.7));
-  let assistantBudget = Math.min(assistantText.length, totalBudget - userBudget);
-  let remaining = totalBudget - userBudget - assistantBudget;
-  const extraUser = Math.min(remaining, userText.length - userBudget);
-  userBudget += extraUser;
-  remaining -= extraUser;
-  assistantBudget += Math.min(remaining, assistantText.length - assistantBudget);
-
-  const sections = [];
-  const cwdParts = sessionCwd.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
-  if (cwdParts.length) sections.push(`Session context:\nWorking directory: ${cwdParts[cwdParts.length - 1]}`);
-  if (userText) sections.push(`User requests (authoritative task context):\n${boundTitleContext(userText, userBudget)}`);
-  if (assistantText) sections.push(`Assistant evidence (use only for topic, target, and scope; ignore completion and process wording):\n${boundTitleContext(assistantText, assistantBudget)}`);
-  return `${TITLE_PROMPT}\n\nConversation evidence:\n${sections.join('\n\n')}`;
-}
-
-function cleanGeneratedTitle(output) {
-  const safeOutput = String(output || '')
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '');
-  const lines = safeOutput.split(/\r?\n/)
-    .map(line => line.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim())
-    .filter(Boolean);
-  if (lines.length !== 1) throw new Error('model must return exactly one line');
-  const title = lines[0]
-    .replace(/^title\s*:\s*/i, '')
-    .replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '')
-    .trim();
-  const separator = title.indexOf(':');
-  if (separator <= 0 || separator !== title.lastIndexOf(':') || separator === title.length - 1) {
-    throw new Error('model must return one title and subtitle separated by a colon');
-  }
-  return [...title].slice(0, 200).join('');
-}
-
-function titleGenerationArgs(model, effort, prompt) {
-  return [
-    '--print', '--no-session', '--no-context-files',
-    '--no-skills', '--no-prompt-templates', '--no-tools',
-    '--system-prompt', 'You generate durable factual topic labels, not completion reports or conversation summaries. Use base-form imperative actions in both the title and subtitle. Describe the session’s central task independent of progress, using assistant evidence only for the topic, target, and scope. Never copy status, process, accomplishments, plans, promises, tool usage, first-person wording, or report-style phrasing. Follow the user instructions exactly and output only the requested single-line title and subtitle.',
-    '--model', model, '--thinking', effort, prompt,
-  ];
-}
-
-function titleGenerationBlocker(target) {
-  return target && target.titleSource === 'manual'
-    ? 'manual title exists; clear it with e before generating'
-    : '';
 }
 
 // ── Filtering by tab ──────────────────────────────────
@@ -679,7 +537,7 @@ function footerText() {
   if (tabs[tabIdx] === TASKS_TAB) return tasksView.help();
   if (mode === 'filter') return 'Type search · Enter apply · Esc clear';
   const item = visibleItems()[cursor];
-  if (item?.kind === 'tick') return 'Enter output · a reviewed · ? keys';
+  if (item?.kind === 'tick') return 'Enter output · c continue · a reviewed · ? keys';
   if (item && isSnoozed(item)) return 's restore · Enter resume · ? keys';
   return 'Enter resume · s snooze · ? keys';
 }
@@ -759,7 +617,25 @@ function openResult(entry) {
   markResult(entry);
   resultOffset = 0;
   resultLines = resultDetails(entry, Infinity);
+  resultEntry = entry;
   mode = 'result';
+}
+
+// Copy the run into a Pi conversation (or reopen the one made earlier) and
+// resume it like any other conversation.
+function continueResult(entry) {
+  let run;
+  try {
+    run = continueTickRun(entry, {
+      sessionsRoot: SESSIONS_ROOT,
+      flat: Boolean(process.env.PI_SESSION_DIR || process.env.PI_CODING_AGENT_SESSION_DIR),
+    });
+  } catch (error) { notice = `Cannot continue tick ${entry.id}: ${error.message}`; return; }
+  markResult(entry);
+  sessions = scanSessions();
+  const session = sessions.find(s => s.id === run.id);
+  if (!session) { notice = `Saved ${run.file}, but cannot read it back — press r and resume it`; return; }
+  resumeSession(session, true);
 }
 
 function renderResult() {
@@ -768,11 +644,12 @@ function renderResult() {
   const rows = resultLines.flatMap(line => wrapRows(line, width));
   resultOffset = Math.min(resultOffset, Math.max(0, rows.length - height));
   process.stdout.write(frameHeader(width) + ' ' + rows.slice(resultOffset, resultOffset + height).join('\n ') +
-    '\n\n ' + trunc('↑↓ scroll · Esc back · ? keys', width) + '\n' + (notice ? ' ' + trunc(notice, width) + '\n' : ''));
+    '\n\n ' + trunc('↑↓ scroll · c continue · Esc back · ? keys', width) + '\n' + (notice ? ' ' + trunc(notice, width) + '\n' : ''));
 }
 
 function handleResult(key) {
-  if (['escape', 'q', 'return', 'd'].includes(key.name)) mode = 'list';
+  if (key.name === 'c' && resultEntry) continueResult(resultEntry);
+  else if (['escape', 'q', 'return', 'd'].includes(key.name)) mode = 'list';
   else if (['down', 'j', 'pagedown'].includes(key.name)) resultOffset += key.name === 'pagedown' ? 5 : 1;
   else if (['up', 'k', 'pageup'].includes(key.name)) resultOffset = Math.max(0, resultOffset - (key.name === 'pageup' ? 5 : 1));
   else if (key.name === 'tab') focusTab(1);
@@ -796,7 +673,7 @@ function saveSnooze(session, until) {
   saveFavorites(favorites);
   const previous = meta[session.id];
   meta[session.id] = entry;
-  try { saveMeta(); }
+  try { saveMeta(session.id); }
   catch (error) { meta[session.id] = previous; throw error; }
 }
 
@@ -893,10 +770,11 @@ function openGenerationSettings(pendingTarget = null) {
     models = entries.map(entry => entry.id);
     modelThinking = new Set(entries.filter(entry => entry.thinking).map(entry => entry.id));
     modelStatus = models.length ? '' : `Could not list models${stderr.trim() ? `: ${stderr.trim()}` : ''}`;
-    const preferred = [metaSettings.titleModel, configuredPiModel()].filter(Boolean);
+    const current = titleSettings(metaSettings);
+    const preferred = [current.model, configuredPiModel()].filter(Boolean);
     const idx = preferred.map(m => models.indexOf(m)).find(i => i >= 0);
     modelSel = idx !== undefined ? idx : 0;
-    modelEffort = EFFORT_LEVELS.includes(metaSettings.titleThinkingLevel) ? metaSettings.titleThinkingLevel : 'off';
+    modelEffort = EFFORT_LEVELS.includes(current.effort) ? current.effort : 'off';
     if (!modelThinking.has(models[modelSel])) modelEffort = 'off';
     render();
   });
@@ -912,14 +790,9 @@ function enqueueTitle(target) {
   if (target.remote) { notice = 'Edit this conversation on its origin machine'; return; }
   const blocked = titleGenerationBlocker(target);
   if (blocked) { notice = blocked; return; }
-  if (!metaSettings.titleModel) return openGenerationSettings(target);
   if (generationChildren.has(target.id) || generationJobs.some(job => job.target.id === target.id)) return;
 
-  generationJobs.push({
-    target,
-    model: metaSettings.titleModel,
-    effort: metaSettings.titleThinkingLevel || 'off',
-  });
+  generationJobs.push({ target, ...titleSettings(metaSettings) });
   if (!generationActive) {
     generationCancelled = false;
     generationActive = true;
@@ -975,10 +848,7 @@ function startTitleGeneration(job) {
   catch (e) { notice = `title generation failed: ${e.message}`; return; }
 
   let stdout = '', settled = false, timedOut = false;
-  const child = spawn('pi', titleGenerationArgs(job.model, job.effort, prompt), {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: PI_ENV,
-  });
+  const child = spawnTitleChild(job.model, job.effort, prompt, PI_ENV);
   generationChildren.set(job.target.id, child);
   const timer = setTimeout(() => {
     if (!settled) { timedOut = true; terminateChild(child); }
@@ -1167,7 +1037,7 @@ function toggleFavorite(session) {
     favorites.delete(session.id);
     if (overridesFor(session.id).snoozedUntil !== undefined) {
       delete meta[session.id].snoozedUntil;
-      saveMeta();
+      saveMeta(session.id);
     }
   } else favorites.add(session.id);
   saveFavorites(favorites);
@@ -1201,6 +1071,7 @@ function handleList(str, key) {
   const selected = list[cursor];
   if (selected?.kind === 'tick') {
     if (k === 'return' || k === 'd') openResult(selected);
+    else if (k === 'c') continueResult(selected);
     else if (str === 'a') markResult(selected);
     return; // Never send a tick result to conversation actions.
   }

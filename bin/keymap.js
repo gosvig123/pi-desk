@@ -31,6 +31,7 @@ const SECTIONS = [
   ['Favorites sections', [
     ['↑↓ j k', 'Favorites / Snoozed / Tick results'],
     ['Enter / d', 'open tick output; mark reviewed'],
+    ['c', 'continue tick run as a conversation'],
     ['a', 'mark selected tick reviewed'],
     ['s', 'restore selected snoozed chat'],
     ['r', 'reload conversations and results'],

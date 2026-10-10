@@ -14,6 +14,10 @@ A keyboard-driven workspace for Pi conversations, task links, and finished tick 
 
 **Reviewed result**: A tick result the user has opened or explicitly marked reviewed.
 
+**Continued run**: The Pi conversation made from one local tick result's transcript, so the user can reply to that run.
+
+**Display title**: The name Desk shows for a conversation, stored in `pisesh-meta.json` by session id, never in the session file. It is manual (set with `e`) or generated (by the title model). Without one, Desk shows the first prompt.
+
 **Task panel**: The floating view of one tasks list or one opened task, shown in pi's right column. It is hidden, unfocused (visible, keys go to the editor), or focused (keys go to the panel).
 
 ## Relationships
@@ -23,3 +27,5 @@ A keyboard-driven workspace for Pi conversations, task links, and finished tick 
 - One tick job can produce many **Tick results**; each run has its own review status.
 - The **Task panel** opens on the task linked to the current conversation, else on the tasks CLI's current list. Switching lists in the panel also changes the tasks CLI's current list.
 - A **Reviewed result** stays visible in Tick results; conversation favorites do not require review status.
+- A conversation gets a generated **Display title** after its first finished turn, unless it already has one; a manual one is never replaced.
+- One local **Tick result** has at most one **Continued run**; it is an ordinary conversation, and later runs of the job do not read it.
