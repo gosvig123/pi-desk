@@ -139,6 +139,10 @@ Pi's footer shows the count of new results, for example
 `◆ 3 tick results to review · 1 failed · /desk`, in every interactive session.
 It checks every 30 seconds and disappears when everything is reviewed.
 
+## Session search
+
+The `session_search` tool lets the agent find an earlier conversation by topic ("the thread where we set up the eSIM"). It matches each query word against the Desk title, your messages, the last answer, and the files and URLs a conversation produced, and filters by folder (`cwd`) and date (`since`: `2026-10-01`, `7d`). It returns session file paths to read, the newest copy of forked conversations, and never the calling conversation. Summaries are cached in `~/.pi/agent/pisesh-search-index.json`; the first search reads every top-level session once (about 5 s for 2,000 sessions), later ones re-read only changed files. Subagent runs are not indexed.
+
 ## Cross-machine sync
 
 The separately configured background service checks tasks, conversation

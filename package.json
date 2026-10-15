@@ -45,12 +45,17 @@
       "./extensions/sesh.ts",
       "./extensions/task-panel.ts",
       "./extensions/review-status.ts",
-      "./extensions/session-titles.ts"
+      "./extensions/session-titles.ts",
+      "./extensions/session-search.ts"
     ],
     "image": "https://raw.githubusercontent.com/Blue-B/pisesh/main/assets/preview.png"
   },
   "scripts": {
     "test": "node --check bin/pisesh && node --test test/*.test.js",
     "prepublishOnly": "npm test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   }
 }
