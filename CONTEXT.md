@@ -18,6 +18,8 @@ A keyboard-driven workspace for Pi conversations, task links, and finished tick 
 
 **Display title**: The name Desk shows for a conversation, stored in `pisesh-meta.json` by session id, never in the session file. It is manual (set with `e`) or generated (by the title model). Without one, Desk shows the first prompt.
 
+**Session search index**: One cached summary per top-level session file (Desk title, user messages, last answer, files written, URLs) that `session_search` ranks; subagent runs and forks are not separate rows.
+
 **Task panel**: The floating view of one tasks list or one opened task, shown in pi's right column. It is hidden, unfocused (visible, keys go to the editor), or focused (keys go to the panel).
 
 ## Relationships
