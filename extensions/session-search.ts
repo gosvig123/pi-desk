@@ -1,5 +1,5 @@
 /**
- * session_search: find earlier Pi conversations by topic, so "the thread where
+ * session_lookup: find earlier Pi conversations by topic, so "the thread where
  * we…" does not need hand-written greps over session files.
  */
 
@@ -31,14 +31,14 @@ function formatResult(result: Result, index: number): string {
 
 export default function (pi: ExtensionAPI) {
 	pi.registerTool({
-		name: "session_search",
-		label: "Session Search",
+		name: "session_lookup",
+		label: "Session Lookup",
 		description: "Find earlier Pi conversations (threads, sessions) by topic. Returns titles, dates, working directories, session file paths, excerpts, the last answer, and the files and URLs each conversation produced.",
 		promptSnippet: "Find earlier Pi conversations by topic, folder, and date.",
 		promptGuidelines: [
-			"Use session_search when the user refers to an earlier Pi thread, session, or conversation, or to something made in one (a sheet, diagram, file, or decision), before you grep session files yourself.",
-			"Results rank by how many query words match. A top result that matches most words is usually the thread; read it instead of grepping session files to confirm one missing word. Grep only when session_search finds nothing relevant.",
-			"After session_search, read only the relevant part of a returned session file with ctx_execute_file; session files can be tens of megabytes.",
+			"Use session_lookup first when the user refers to an earlier Pi thread, session, or conversation, or to something made in one (a sheet, diagram, file, or decision), before you grep session files yourself.",
+			"Results rank by how many query words match. A top result that matches most words is usually the thread; read it instead of grepping session files to confirm one missing word. Grep only when session_lookup finds nothing relevant.",
+			"If no relevant session is found, try session_search when available. To inspect a match, use session_read when available; otherwise read only the relevant part of its file.",
 		],
 		parameters: PARAMETERS,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
