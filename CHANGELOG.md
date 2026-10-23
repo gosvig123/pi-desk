@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- Rename Desk's `session_search` tool to `session_lookup` so it can coexist with `pi-session-search`. Update direct callers to use the new name; search behavior is unchanged.
 - Put Conversations, Ticks, Review, and Tasks on a single numbered navigation row, with counts on Ticks and Review once their data is read. The separate Sessions/Ticks/Review row is gone.
 - Replace the fixed footer key wall (165 columns of keys, truncated on most terminals) and the duplicate hint row with one footer line that shows only the keys of the current tab, plus a `?` key map that lays itself out in columns.
 - `1`-`4` jump to a tab, `T` and `R` jump to Ticks and Review, and notices render once instead of staying in the header.
