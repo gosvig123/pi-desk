@@ -38,7 +38,7 @@ export default function (pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Use session_lookup first when the user refers to an earlier Pi thread, session, or conversation, or to something made in one (a sheet, diagram, file, or decision), before you grep session files yourself.",
 			"Results rank by how many query words match. A top result that matches most words is usually the thread; read it instead of grepping session files to confirm one missing word. Grep only when session_lookup finds nothing relevant.",
-			"If no relevant session is found, try session_search when available. To inspect a match, use session_read when available; otherwise read only the relevant part of its file.",
+			"If no relevant session is found, try session_search when available. To inspect a match, use session_read when available; otherwise read only the relevant part of its file; session files can be tens of megabytes.",
 		],
 		parameters: PARAMETERS,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
