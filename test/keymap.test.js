@@ -8,12 +8,11 @@ const { spawnSync } = require('node:child_process');
 const { SECTIONS, keymapLines } = require('../bin/keymap');
 const { displayWidth } = require('../bin/task-layout');
 
-test('key map describes two tabs, snoozes and finished results, not job controls', () => {
+test('key map describes two tabs and snoozes, not job controls', () => {
   const text = SECTIONS.flatMap(([title, entries]) => [title, ...entries.flat()]).join('\n');
   assert.match(text, /Tab \/ 1 2/);
   assert.match(text, /snooze \/ restore/);
-  assert.match(text, /mark selected tick reviewed/);
-  assert.doesNotMatch(text, /enable or disable|run now|jump to Ticks|reload review/);
+  assert.doesNotMatch(text, /tick|enable or disable|run now|reload review/i);
   for (const width of [130, 100, 60, 30]) {
     const rows = keymapLines(width, 26);
     assert.ok(rows.length <= 26 && rows.every(row => displayWidth(row) <= width));
@@ -21,24 +20,20 @@ test('key map describes two tabs, snoozes and finished results, not job controls
   }
 });
 
-test('picker renders three sections, persists snoozes and review marks, and keeps task navigation', t => {
+test('picker renders two sections, persists snoozes, and keeps task navigation', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-ui-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(__dirname, '../bin/pisesh');
   const checks = `
     tasksView.started = true;
     fs.mkdirSync(SESSIONS_ROOT, { recursive: true });
-    fs.mkdirSync(process.env.PI_TICK_DATA_DIR, { recursive: true });
     fs.writeFileSync(path.join(SESSIONS_ROOT, 'focus.jsonl'), [
       { type: 'session', id: 'focus', timestamp: new Date().toISOString(), cwd: '/repo/project' },
       { type: 'message', message: { role: 'user', content: 'Fix session switching' } },
     ].map(value => JSON.stringify(value)).join('\\n'));
     favorites.add('focus'); saveFavorites(favorites);
     saveTitle('focus', 'Fix session switching', 'llm', 'provider/model', 'high');
-    fs.writeFileSync(path.join(process.env.PI_TICK_DATA_DIR, 'runs.jsonl'), ['one', 'two'].map(runId => JSON.stringify({
-      jobId: 'same-job', runId, finishedAt: new Date().toISOString(), exitCode: 0, finalTextPreview: 'Result ' + runId,
-    })).join('\\n'));
-    sessions = scanSessions(); reloadResults();
+    sessions = scanSessions();
     let output = '';
     process.stdout.write = text => { output += text; return true; };
     const plain = () => output.replace(/\\x1b\\[[0-9;]*[A-Za-z]/g, '');
@@ -46,7 +41,8 @@ test('picker renders three sections, persists snoozes and review marks, and keep
       process.stdout.columns = width; process.stdout.rows = 30;
       output = ''; render();
       const screen = plain();
-      for (const heading of ['Favorites (', 'Snoozed (', 'Tick results (']) assert.ok(screen.includes(heading), screen);
+      for (const heading of ['Favorites (', 'Snoozed (']) assert.ok(screen.includes(heading), screen);
+      assert.ok(!screen.includes('Tick results'), screen);
       assert.ok(screen.includes('1 Conversations') && screen.includes('2 Tasks'));
       assert.ok(!screen.includes('3 Review') && !screen.includes('pi-desk'));
       assert.ok(!screen.includes('provider/model') && !screen.includes('◆'));
@@ -83,18 +79,8 @@ test('picker renders three sections, persists snoozes and review marks, and keep
     meta.focus.snoozedUntil = new Date(Date.now() - 1).toISOString(); saveMeta('focus');
     assert.equal(visibleSections()[0].items[0].id, 'focus');
     assert.equal(visibleSections()[1].items.length, 0);
-    cursor = visibleItems().findIndex(item => item.runId === 'one');
-    handleList('e', { name: 'e' }); assert.equal(mode, 'list');
-    handleList('', { name: 'return' }); assert.equal(mode, 'result');
-    output = ''; render(); assert.ok(output.includes('Result one'));
-    assert.ok(output.includes('reviewed'));
-    handleResult({ name: 'escape' }); reloadResults();
-    assert.equal(tickResults.length, 2);
-    assert.equal(tickResults.find(item => item.runId === 'one').reviewed, true);
-    assert.equal(tickResults.find(item => item.runId === 'two').reviewed, false);
-    assert.equal(new ReviewStore(reviewStore.file).has('tick:same-job:one'), true);
     cursor = 0; handleList('d', { name: 'd' }); handleDetails('f', { name: 'f' });
-    assert.equal(visibleItems()[0].kind, 'tick');
+    assert.equal(visibleItems().length, 0);
     output = ''; render();
     assert.ok(output.includes('Fix session switching') && output.includes('first prompt:'));
     handleDetails('', { name: 'escape' });
@@ -108,7 +94,7 @@ test('picker renders three sections, persists snoozes and review marks, and keep
       setTimeout, clearTimeout
     });`;
   const env = { ...process.env, PI_AGENT_DIR: dir, PI_CODING_AGENT_DIR: dir,
-    PI_SESSION_DIR: path.join(dir, 'sessions'), PI_TICK_DATA_DIR: path.join(dir, 'tick') };
+    PI_SESSION_DIR: path.join(dir, 'sessions') };
   const result = spawnSync(process.execPath, ['-e', script], { env, encoding: 'utf8', timeout: 10000 });
   assert.equal(result.status, 0, result.stderr);
   const help = spawnSync(process.execPath, [file, '--help'], { env, encoding: 'utf8', timeout: 10000 });

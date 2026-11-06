@@ -35,7 +35,7 @@ export default function (pi: ExtensionAPI) {
 	let warned = false;
 
 	pi.on("agent_end", async (_event, ctx) => {
-		// Print runs are scripted (ticks, title calls); subagents are not Desk rows.
+		// Print runs are scripted (scheduled runs, title calls); subagents are not Desk rows.
 		if (ctx.mode === "print" || process.env[TITLE_CHILD_ENV] || process.env.PI_SUBAGENT_CHILD === "1") return;
 		const id = ctx.sessionManager.getSessionId();
 		const file = ctx.sessionManager.getSessionFile();

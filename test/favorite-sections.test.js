@@ -23,10 +23,9 @@ test('expired conversations return to Favorites; indefinite snoozes do not expir
     { id: 'timer', favored: true, snoozedUntil: snoozeDeadline('30m', now) },
     { id: 'other', favored: false },
   ];
-  const runs = [{ id: 'job', key: 'one' }, { id: 'job', key: 'two' }];
-  const groups = favoriteSections(sessions, runs, now);
-  assert.deepEqual(groups.map(group => group.items.map(item => item.id)), [['active'], ['manual', 'timer'], ['job', 'job']]);
-  const expired = favoriteSections(sessions, runs, now + 30 * 60000);
+  const groups = favoriteSections(sessions, now);
+  assert.deepEqual(groups.map(group => group.items.map(item => item.id)), [['active'], ['manual', 'timer']]);
+  const expired = favoriteSections(sessions, now + 30 * 60000);
   assert.deepEqual(expired[0].items.map(item => item.id), ['active', 'timer']);
   assert.deepEqual(expired[1].items.map(item => item.id), ['manual']);
   assert.equal(isSnoozed(sessions[0], now), false);
@@ -34,11 +33,11 @@ test('expired conversations return to Favorites; indefinite snoozes do not expir
   assert.equal(sessions[2].favored, true);
 });
 
-test('three stacked sections keep the selected row visible, skip empty groups, and fit', () => {
+test('stacked sections keep the selected row visible, skip empty groups, and fit', () => {
   const sections = [
     { label: 'Favorites', items: Array.from({ length: 20 }, (_, i) => ({ id: `f${i}` })) },
-    { label: 'Snoozed', items: [] },
-    { label: 'Tick results', items: Array.from({ length: 20 }, (_, i) => ({ id: `t${i}`, reviewed: i > 0 })) },
+    { label: 'Empty', items: [] },
+    { label: 'Snoozed', items: Array.from({ length: 20 }, (_, i) => ({ id: `s${i}` })) },
   ];
   for (const width of [38, 78, 118]) for (const height of [6, 12, 24]) {
     for (const cursor of [0, 19, 20, 39]) {
@@ -48,9 +47,8 @@ test('three stacked sections keep the selected row visible, skip empty groups, a
       assert.equal(rows.filter(row => row.startsWith('▶')).length, 1);
       assert.ok(rows.find(row => row.startsWith('Favorites')));
       assert.ok(rows.find(row => row.startsWith('Snoozed')));
-      assert.match(rows.find(row => row.startsWith('Tick results')), /1 new/);
     }
   }
-  const empty = favoriteSections([], []);
+  const empty = favoriteSections([]);
   assert.equal(sectionRows(empty, 0, 3, 38, () => '').length, 3);
 });

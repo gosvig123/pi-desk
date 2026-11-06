@@ -53,7 +53,7 @@ finally:
       encoding: 'utf8', timeout: 30000,
       env: { ...process.env, NODE: process.execPath, PICKER: path.resolve(__dirname, '../bin/pisesh'),
         PI_AGENT_DIR: dir, PI_CODING_AGENT_DIR: dir, PI_SESSION_DIR: sessions,
-        PI_TICK_DATA_DIR: path.join(dir, 'tick'), PISESH_CWD: dir, PISESH_CURRENT_SESSION: 'desk-title-check' },
+        PISESH_CWD: dir, PISESH_CURRENT_SESSION: 'desk-title-check' },
     });
     assert.equal(result.status, 0, result.stderr || result.error?.message || result.stdout);
   } finally {

@@ -17,11 +17,10 @@ function snoozeDeadline(input, now = Date.now()) {
   return new Date(Number(now) + minutes * 60000).toISOString();
 }
 
-function favoriteSections(sessions, results, now = Date.now()) {
+function favoriteSections(sessions, now = Date.now()) {
   return [
     { label: 'Favorites', items: sessions.filter(session => session.favored && !isSnoozed(session, now)) },
     { label: 'Snoozed', items: sessions.filter(session => isSnoozed(session, now)) },
-    { label: 'Tick results', items: results },
   ];
 }
 
@@ -35,8 +34,7 @@ function sectionRows(sections, cursor, height, width, renderItem) {
     const selected = cursor - offset;
     const active = selected >= 0 && selected < section.items.length;
     const position = active ? `${selected + 1}/` : '';
-    const unread = section.label === 'Tick results' ? ` · ${section.items.filter(item => !item.reviewed).length} new` : '';
-    if (size > 0) rows.push(clip(`${section.label} (${position}${section.items.length})${unread}`, width));
+    if (size > 0) rows.push(clip(`${section.label} (${position}${section.items.length})`, width));
     const available = Math.max(0, size - 1);
     const start = active ? Math.max(0, Math.min(selected - Math.floor(available / 2), section.items.length - available)) : 0;
     const body = section.items.slice(start, start + available)

@@ -29,12 +29,9 @@ const SECTIONS = [
     ['r', 'rescan sessions'],
   ]],
   ['Favorites sections', [
-    ['↑↓ j k', 'Favorites / Snoozed / Tick results'],
-    ['Enter / d', 'open tick output; mark reviewed'],
-    ['c', 'continue tick run as a conversation'],
-    ['a', 'mark selected tick reviewed'],
+    ['↑↓ j k', 'Favorites / Snoozed'],
     ['s', 'restore selected snoozed chat'],
-    ['r', 'reload conversations and results'],
+    ['r', 'reload conversations'],
   ]],
   ['Tasks', [
     ['↑↓ j k', 'move'],
@@ -51,9 +48,7 @@ const SECTIONS = [
   ['Files', [
     ['favorites.json', 'starred conversations'],
     ['pisesh-meta.json', 'titles, directories, snoozes'],
-    ['pisesh-review.json', 'tick review state'],
     ['pisesh-task-links.json', 'task links'],
-    ['tick/runs.jsonl', 'finished tick results'],
   ]],
 ];
 

@@ -44,7 +44,6 @@
     "extensions": [
       "./extensions/sesh.ts",
       "./extensions/task-panel.ts",
-      "./extensions/review-status.ts",
       "./extensions/session-titles.ts",
       "./extensions/session-search.ts"
     ],

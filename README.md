@@ -51,13 +51,13 @@ One row holds every destination, numbered so the jump keys are visible:
 - `e` sets a display title. `g` queues model-generated titles; `G` opens settings.
 - `p` changes the working directory used on resume. `d` opens details.
 - `t` associates the conversation with a task. Type to filter, `Enter` applies, `Esc` cancels, and the `No task` row clears the link.
-- `r` reloads conversations and tick results. `Esc` / `q` clears search or closes the picker.
+- `r` reloads conversations. `Esc` / `q` clears search or closes the picker.
 
 Conversation rows put the title first, then the project and time when there is
 space. Full paths, title origin, model settings, and task links stay in details.
-Favorites has three stacked sections: **Favorites**, **Snoozed**, and **Tick results**.
+Favorites has two stacked sections: **Favorites** and **Snoozed**.
 Arrow keys move through them in order, skipping empty sections. Search applies
-to all three sections. Today, Here, and All remain conversation-only views.
+to both sections. Today, Here, and All remain conversation-only views.
 
 `/desk` switches the current Pi session; it does not launch a second agent.
 If the agent is working, the switch waits until it finishes. Starting a conversation
@@ -109,36 +109,6 @@ created. Snoozes are stored alongside title overrides in `pisesh-meta.json` and
 do not change session history. They do not hide conversations from Today, Here,
 or All. Remote conversations must be snoozed on their origin machine.
 
-## Tick results
-
-The bottom section of Favorites reads finished runs from
-`~/.pi/agent/tick/runs.jsonl` (or `PI_TICK_DATA_DIR`). It shows up to 100 recent
-runs, one row per run, newest first. Rows show result previews, not job prompts
-or schedules. Each result is marked **new** or **reviewed**. Existing review
-marks are reused; unmarked results start as new, including on first use.
-
-- `Enter` / `d` opens the output and marks that run reviewed.
-- `a` marks the selected run reviewed without opening it.
-- `c`, in the list or the output, continues the run as a conversation. pi-desk
-  copies the run's messages from its transcript into a Pi session in the job's
-  directory, then resumes it, so you can reply with the run's full context.
-  Pressing `c` again on the same run reopens that conversation. Remote results
-  must be continued on their origin machine.
-- `↑` / `↓` scrolls output; `Esc` returns to the list.
-- Reviewed results stay visible. Conversation favorites do not have review badges.
-
-Output uses the last assistant reply found in the final 256 KB of the run
-transcript, up to 32,000 characters. If unavailable, it shows the saved preview.
-The details include the transcript path. The list refreshes every 30 seconds or
-with `r`. Job enable/disable/run controls remain in pi-tick, not pi-desk.
-
-Review marks live in `~/.pi/agent/pisesh-review.json`; the newest 2000 keys are
-kept for 90 days. Reviewing never changes transcripts or tick jobs.
-
-Pi's footer shows the count of new results, for example
-`◆ 3 tick results to review · 1 failed · /desk`, in every interactive session.
-It checks every 30 seconds and disappears when everything is reviewed.
-
 ## Session search
 
 The `session_lookup` tool (formerly `session_search`) lets the agent find an earlier conversation by topic ("the thread where we set up the eSIM"). It matches each query word against the Desk title, your messages, the last answer, and the files and URLs a conversation produced, and filters by folder (`cwd`) and date (`since`: `2026-10-01`, `7d`). It returns session file paths to read, the newest copy of forked conversations, and never the calling conversation. Summaries are cached in `~/.pi/agent/pisesh-search-index.json`; the first search reads every top-level session once (about 5 s for 2,000 sessions), later ones re-read only changed files. Subagent runs are not indexed.
@@ -147,12 +117,9 @@ For broader indexed history search, optionally install [pi-session-search](https
 
 ## Cross-machine sync
 
-The separately configured background service checks tasks, conversation
-references, and finished Tick results every 30 seconds. It uses the existing
-task Gist and trusted SSH, without copying full transcripts or pruning tasks.
-Remote Tick results appear in Favorites with `[origin]`; Enter opens the synced
-final reply (up to 8,000 characters, with saved preview fallback). Schedules and
-review marks stay on their own machines. Run `/desk sync` for status.
+The separately configured background service checks tasks and conversation
+references every 30 seconds. It uses the existing task Gist and trusted SSH,
+without copying full transcripts or pruning tasks. Run `/desk sync` for status.
 Remote conversations provide manual continuation guidance, not automatic resume.
 See [Cross-machine sync](docs/sync.md) for setup, limits, and service controls.
 
