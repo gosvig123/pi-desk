@@ -66,13 +66,6 @@ function parseSelection(raw) {
   if (value.version !== SELECTION_VERSION) {
     throw new Error('picker returned an invalid selection version');
   }
-  if (value.remoteConversation !== undefined) {
-    const data = value.remoteConversation;
-    if (!data || ['notice', 'command'].some(key => typeof data[key] !== 'string' || data[key].length > 8192 || /[\x00-\x1f\x7f]/.test(data[key]))) {
-      throw new Error('picker returned invalid remote continuation guidance');
-    }
-    return { version: SELECTION_VERSION, remoteConversation: { notice: data.notice, command: data.command } };
-  }
   if (value.newConversation !== undefined) {
     const request = value.newConversation || {};
     return { version: SELECTION_VERSION, newConversation: { task: parseTaskLink(request.task) } };

@@ -98,7 +98,7 @@ migration or sync commands.
 
 ## Snoozed conversations
 
-Press `s` on a local conversation. Leave the duration blank for no timer, or use
+Press `s` on a conversation. Leave the duration blank for no timer, or use
 `30m`, `2h`, `1d`, or `1w` (up to 365 days). `Enter` confirms; `Esc` cancels.
 Snoozing stars the conversation and moves it out of active Favorites. Press `s`
 on a snoozed conversation to restore it immediately.
@@ -107,21 +107,13 @@ Timed snoozes return to Favorites at the next list refresh (within 30 seconds
 while the list is open), or when the picker is reopened. No background job is
 created. Snoozes are stored alongside title overrides in `pisesh-meta.json` and
 do not change session history. They do not hide conversations from Today, Here,
-or All. Remote conversations must be snoozed on their origin machine.
+or All.
 
 ## Session search
 
 The `session_lookup` tool (formerly `session_search`) lets the agent find an earlier conversation by topic ("the thread where we set up the eSIM"). It matches each query word against the Desk title, your messages, the last answer, and the files and URLs a conversation produced, and filters by folder (`cwd`) and date (`since`: `2026-10-01`, `7d`). It returns session file paths to read, the newest copy of forked conversations, and never the calling conversation. Summaries are cached in `~/.pi/agent/pisesh-search-index.json`; the first search reads every top-level session once (about 5 s for 2,000 sessions), later ones re-read only changed files. Subagent runs are not indexed.
 
 For broader indexed history search, optionally install [pi-session-search](https://github.com/samfoy/pi-session-search) with `pi install npm:pi-session-search`. It provides `session_search`, `session_list`, and `session_read`; Desk's `session_lookup` works without it.
-
-## Cross-machine sync
-
-The separately configured background service checks tasks and conversation
-references every 30 seconds. It uses the existing task Gist and trusted SSH,
-without copying full transcripts or pruning tasks. Run `/desk sync` for status.
-Remote conversations provide manual continuation guidance, not automatic resume.
-See [Cross-machine sync](docs/sync.md) for setup, limits, and service controls.
 
 ## Conversation and task links
 

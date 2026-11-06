@@ -15,7 +15,6 @@ const { spawn } = require('child_process');
 const readline = require('readline');
 const { StringDecoder } = require('string_decoder');
 const { TASKS_TAB, loadTasks } = require('./tasks-data');
-const { remoteConversations } = require('./remote-conversations');
 const { TasksView } = require('./tasks-view');
 const { CONVERSATIONS_TAB, ConversationViews } = require('./conversation-views');
 const { isSnoozed, snoozeDeadline, favoriteSections, sectionRows } = require('./favorite-sections');
@@ -331,7 +330,6 @@ function scanSessions() {
       });
     }
   }
-  results.push(...remoteConversations(AGENT_DIR).map(s => ({ ...s, get favored() { return favorites.has(this.id); } })));
   results.sort((a, b) => b.mtime - a.mtime);
   return results;
 }
@@ -583,7 +581,6 @@ function renderList() {
 
 function startSnooze(session) {
   if (!session) return;
-  if (session.remote) { notice = 'Snooze this conversation on its origin machine'; return; }
   editTarget = session;
   editBuffer = '';
   editCursor = 0;
@@ -713,7 +710,6 @@ function takeGenerationBatch(queue, activeCount, limit = TITLE_GENERATION_CONCUR
 
 function enqueueTitle(target) {
   if (!target) return;
-  if (target.remote) { notice = 'Edit this conversation on its origin machine'; return; }
   const blocked = titleGenerationBlocker(target);
   if (blocked) { notice = blocked; return; }
   if (generationChildren.has(target.id) || generationJobs.some(job => job.target.id === target.id)) return;
@@ -1092,7 +1088,6 @@ function handleModelPicker(str, key) {
 // Open the title editor, seeded with the current override.
 function startEdit(s) {
   if (!s) return;
-  if (s.remote) { notice = 'Edit this conversation on its origin machine'; return; }
   editTarget = s;
   editBuffer = s.titleOverride || '';
   editCursor = [...editBuffer].length; // start with the caret at the end
@@ -1174,7 +1169,6 @@ function safeIsDir(p) { try { return fs.statSync(p).isDirectory(); } catch { ret
 // Enter the cwd picker for a session, seeded at its current effective cwd.
 function startBrowse(s) {
   if (!s) return;
-  if (s.remote) { notice = 'Edit this conversation on its origin machine'; return; }
   editTarget = s;
   buildBrowse(s.cwdOverride || s.cwd || CURRENT_CWD || '/');
   mode = 'browse';
@@ -1258,7 +1252,6 @@ function renderBrowse() {
 // bin/task-link-picker.js and bin/task-link-meta.js).
 function openTaskPicker(s) {
   if (!s) return;
-  if (s.remote) { notice = 'Edit this conversation on its origin machine'; return; }
   linkPickerReturn = mode === 'details' ? 'details' : 'list';
   linkPicker = new TaskLinkPicker(s, {
     palette: A,
@@ -1468,14 +1461,6 @@ function returnSelection(selection) {
 
 function resumeSession(s, useCurrentDefaults = true) {
   if (!s) return;
-  if (s.remote) {
-    handingOff = true;
-    cancelGeneration();
-    leaveTui();
-    if (SELECT_FD !== null) returnSelection({ version: 1, remoteConversation: { notice: s.resumeNotice, command: s.resumeCommand } });
-    else console.log(`${s.resumeNotice}\n\n${s.resumeCommand}`);
-    process.exit(0);
-  }
   // A resumed pi or the parent extension takes over this terminal, so stop
   // background title work and suppress its asynchronous final render.
   handingOff = true;

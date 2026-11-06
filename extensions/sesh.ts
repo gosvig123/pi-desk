@@ -9,7 +9,6 @@
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { runPicker } from "../bin/picker-run.js";
-import { syncStatus } from "../bin/remote-conversations.js";
 import {
 	applyPendingSwitch,
 	SessionSwitchGuard,
@@ -45,8 +44,7 @@ type NewConversationSelection = {
 	newConversation: { task: TaskLink };
 };
 
-type RemoteConversationSelection = { version: 1; remoteConversation: { notice: string; command: string } };
-type PiseshSelection = ResumeSelection | NewConversationSelection | RemoteConversationSelection;
+type PiseshSelection = ResumeSelection | NewConversationSelection;
 
 type PickerResult = {
 	code: number | null;
@@ -103,10 +101,6 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("desk", {
 		description: "Browse conversations and manage tasks in pi-desk",
 		handler: async (_args, ctx) => {
-			if (_args.trim() === "sync") {
-				ctx.ui.notify(syncStatus(), "info");
-				return;
-			}
 			if (ctx.mode !== "tui") {
 				ctx.ui.notify("/desk requires pi's interactive TUI", "warning");
 				return;
@@ -137,12 +131,6 @@ export default function (pi: ExtensionAPI) {
 			}
 			const selection = result.selection;
 			if (!selection) return;
-
-			if ("remoteConversation" in selection) {
-				// Guidance only: never start a second writer for an origin session.
-				await ctx.ui.editor(selection.remoteConversation.notice, selection.remoteConversation.command);
-				return;
-			}
 
 			if ("newConversation" in selection) {
 				await startTaskConversation(selection.newConversation.task, ctx, switchGuard);
